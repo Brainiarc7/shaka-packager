@@ -74,7 +74,7 @@ static bool StartsWith(const uint8_t* buffer,
 
 // Helper function to read up to 64 bits from a bit stream.
 static uint64_t ReadBits(BitReader* reader, int num_bits) {
-  DCHECK_GE(reader->bits_available(), num_bits);
+  DCHECK_GE(static_cast<int>(reader->bits_available()), num_bits);
   DCHECK((num_bits > 0) && (num_bits <= 64));
   uint64_t value;
   reader->ReadBits(num_bits, &value);
@@ -1223,7 +1223,7 @@ static int GetElementId(BitReader* reader) {
     for (int i = 0; i < 4; ++i) {
       num_bits_to_read += 7;
       if (ReadBits(reader, 1) == 1) {
-        if (reader->bits_available() < num_bits_to_read)
+        if (static_cast<int>(reader->bits_available()) < num_bits_to_read)
           break;
         // prefix[] adds back the bits read individually.
         return ReadBits(reader, num_bits_to_read) | prefix[i];
@@ -1244,7 +1244,7 @@ static uint64_t GetVint(BitReader* reader) {
     for (int i = 0; i < 8; ++i) {
       num_bits_to_read += 7;
       if (ReadBits(reader, 1) == 1) {
-        if (reader->bits_available() < num_bits_to_read)
+        if (static_cast<int>(reader->bits_available()) < num_bits_to_read)
           break;
         return ReadBits(reader, num_bits_to_read);
       }
@@ -1268,7 +1268,7 @@ static bool CheckWebm(const uint8_t* buffer, int buffer_size) {
 
   // Get the header size, and ensure there are enough bits to check.
   int header_size = GetVint(&reader);
-  RCHECK(reader.bits_available() / 8 >= header_size);
+  RCHECK(static_cast<int>(reader.bits_available()) / 8 >= header_size);
 
   // Loop through the header.
   while (reader.bits_available() > 0) {
@@ -1726,47 +1726,45 @@ MediaContainerName DetermineContainer(const uint8_t* buffer, int buffer_size) {
 
 MediaContainerName DetermineContainerFromFormatName(
     const std::string& format_name) {
-  if (base::EqualsCaseInsensitiveASCII(format_name, "webm")) {
+  if (base::EqualsCaseInsensitiveASCII(format_name, "aac") ||
+      base::EqualsCaseInsensitiveASCII(format_name, "adts")) {
+    return CONTAINER_AAC;
+  } else if (base::EqualsCaseInsensitiveASCII(format_name, "ac3")) {
+    return CONTAINER_AC3;
+  } else if (base::EqualsCaseInsensitiveASCII(format_name, "ec3") ||
+             base::EqualsCaseInsensitiveASCII(format_name, "eac3")) {
+    return CONTAINER_EAC3;
+  } else if (base::EqualsCaseInsensitiveASCII(format_name, "webm")) {
     return CONTAINER_WEBM;
   } else if (base::EqualsCaseInsensitiveASCII(format_name, "m4a") ||
              base::EqualsCaseInsensitiveASCII(format_name, "m4v") ||
+             base::EqualsCaseInsensitiveASCII(format_name, "m4s") ||
              base::EqualsCaseInsensitiveASCII(format_name, "mp4") ||
              base::EqualsCaseInsensitiveASCII(format_name, "mov")) {
     return CONTAINER_MOV;
   } else if (base::EqualsCaseInsensitiveASCII(format_name, "ts") ||
              base::EqualsCaseInsensitiveASCII(format_name, "mpeg2ts")) {
     return CONTAINER_MPEG2TS;
+  } else if (base::EqualsCaseInsensitiveASCII(format_name, "wvm")) {
+    return CONTAINER_WVM;
+  } else if (base::EqualsCaseInsensitiveASCII(format_name, "vtt") ||
+             base::EqualsCaseInsensitiveASCII(format_name, "webvtt")) {
+    return CONTAINER_WEBVTT;
+  } else if (base::EqualsCaseInsensitiveASCII(format_name, "ttml") ||
+             // Treat xml as ttml.
+             base::EqualsCaseInsensitiveASCII(format_name, "xml")) {
+    return CONTAINER_TTML;
   }
   return CONTAINER_UNKNOWN;
 }
 
 MediaContainerName DetermineContainerFromFileName(
     const std::string& file_name) {
-  if (base::EndsWith(file_name, ".webm",
-                     base::CompareCase::INSENSITIVE_ASCII)) {
-    return CONTAINER_WEBM;
-  } else if (base::EndsWith(file_name, ".mp4",
-                            base::CompareCase::INSENSITIVE_ASCII) ||
-             base::EndsWith(file_name, ".m4a",
-                            base::CompareCase::INSENSITIVE_ASCII) ||
-             base::EndsWith(file_name, ".m4v",
-                            base::CompareCase::INSENSITIVE_ASCII)) {
-    return CONTAINER_MOV;
-  } else if (base::EndsWith(file_name, ".ts",
-                            base::CompareCase::INSENSITIVE_ASCII)) {
-    return CONTAINER_MPEG2TS;
-  } else if (base::EndsWith(file_name, ".vtt",
-                            base::CompareCase::INSENSITIVE_ASCII)) {
-    return CONTAINER_WEBVTT;
-  } else if (base::EndsWith(file_name, ".ttml",
-                            base::CompareCase::INSENSITIVE_ASCII)) {
-    return CONTAINER_TTML;
-  } else if (base::EndsWith(file_name, ".xml",
-                            base::CompareCase::INSENSITIVE_ASCII)) {
-    // In our supported containers, only ttml is in xml format.
-    return CONTAINER_TTML;
-  }
-  return CONTAINER_UNKNOWN;
+  const size_t pos = file_name.rfind('.');
+  if (pos == std::string::npos)
+    return CONTAINER_UNKNOWN;
+  const std::string& file_extension = file_name.substr(pos + 1);
+  return DetermineContainerFromFormatName(file_extension);
 }
 
 }  // namespace media

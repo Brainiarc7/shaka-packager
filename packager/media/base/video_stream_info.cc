@@ -7,7 +7,6 @@
 #include "packager/media/base/video_stream_info.h"
 
 #include "packager/base/logging.h"
-#include "packager/base/stl_util.h"
 #include "packager/base/strings/string_number_conversions.h"
 #include "packager/base/strings/string_util.h"
 #include "packager/base/strings/stringprintf.h"
@@ -21,18 +20,8 @@ std::string VideoCodecToString(Codec codec) {
   switch (codec) {
     case kCodecH264:
       return "H264";
-    case kCodecHEV1:
-      return "HEV1";
-    case kCodecHVC1:
-      return "HVC1";
-    case kCodecVC1:
-      return "VC1";
-    case kCodecMPEG2:
-      return "MPEG2";
-    case kCodecMPEG4:
-      return "MPEG4";
-    case kCodecTheora:
-      return "Theora";
+    case kCodecH265:
+      return "H265";
     case kCodecVP8:
       return "VP8";
     case kCodecVP9:
@@ -47,20 +36,38 @@ std::string VideoCodecToString(Codec codec) {
 
 }  // namespace
 
-VideoStreamInfo::VideoStreamInfo(
-    int track_id, uint32_t time_scale, uint64_t duration, Codec codec,
-    const std::string& codec_string, const uint8_t* codec_config,
-    size_t codec_config_size, uint16_t width, uint16_t height,
-    uint32_t pixel_width, uint32_t pixel_height, int16_t trick_play_rate,
-    uint8_t nalu_length_size, const std::string& language, bool is_encrypted)
-    : StreamInfo(kStreamVideo, track_id, time_scale, duration, codec,
-                 codec_string, codec_config, codec_config_size, language,
+VideoStreamInfo::VideoStreamInfo(int track_id,
+                                 uint32_t time_scale,
+                                 uint64_t duration,
+                                 Codec codec,
+                                 H26xStreamFormat h26x_stream_format,
+                                 const std::string& codec_string,
+                                 const uint8_t* codec_config,
+                                 size_t codec_config_size,
+                                 uint16_t width,
+                                 uint16_t height,
+                                 uint32_t pixel_width,
+                                 uint32_t pixel_height,
+                                 uint32_t trick_play_factor,
+                                 uint8_t nalu_length_size,
+                                 const std::string& language,
+                                 bool is_encrypted)
+    : StreamInfo(kStreamVideo,
+                 track_id,
+                 time_scale,
+                 duration,
+                 codec,
+                 codec_string,
+                 codec_config,
+                 codec_config_size,
+                 language,
                  is_encrypted),
+      h26x_stream_format_(h26x_stream_format),
       width_(width),
       height_(height),
       pixel_width_(pixel_width),
       pixel_height_(pixel_height),
-      trick_play_rate_(trick_play_rate),
+      trick_play_factor_(trick_play_factor),
       nalu_length_size_(nalu_length_size) {}
 
 VideoStreamInfo::~VideoStreamInfo() {}
@@ -75,10 +82,14 @@ bool VideoStreamInfo::IsValidConfig() const {
 std::string VideoStreamInfo::ToString() const {
   return base::StringPrintf(
       "%s codec: %s\n width: %d\n height: %d\n pixel_aspect_ratio: %d:%d\n "
-      "trick_play_rate: %d\n nalu_length_size: %d\n",
+      "trick_play_factor: %d\n nalu_length_size: %d\n",
       StreamInfo::ToString().c_str(), VideoCodecToString(codec()).c_str(),
-      width_, height_, pixel_width_, pixel_height_, trick_play_rate_,
+      width_, height_, pixel_width_, pixel_height_, trick_play_factor_,
       nalu_length_size_);
+}
+
+std::unique_ptr<StreamInfo> VideoStreamInfo::Clone() const {
+  return std::unique_ptr<StreamInfo>(new VideoStreamInfo(*this));
 }
 
 }  // namespace media

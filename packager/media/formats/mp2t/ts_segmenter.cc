@@ -8,13 +8,13 @@
 
 #include <memory>
 
-#include "packager/media/base/aes_encryptor.h"
-#include "packager/media/base/key_source.h"
+#include "packager/media/base/audio_stream_info.h"
 #include "packager/media/base/muxer_util.h"
-#include "packager/media/base/status.h"
 #include "packager/media/base/video_stream_info.h"
 #include "packager/media/event/muxer_listener.h"
-#include "packager/media/event/progress_listener.h"
+#include "packager/media/formats/mp2t/pes_packet.h"
+#include "packager/media/formats/mp2t/program_map_table_writer.h"
+#include "packager/status.h"
 
 namespace shaka {
 namespace media {
@@ -22,90 +22,89 @@ namespace mp2t {
 
 namespace {
 const double kTsTimescale = 90000;
+
+bool IsAudioCodec(Codec codec) {
+  return codec >= kCodecAudio && codec < kCodecAudioMaxPlusOne;
+}
+
+bool IsVideoCodec(Codec codec) {
+  return codec >= kCodecVideo && codec < kCodecVideoMaxPlusOne;
+}
+
 }  // namespace
 
 TsSegmenter::TsSegmenter(const MuxerOptions& options, MuxerListener* listener)
     : muxer_options_(options),
       listener_(listener),
-      ts_writer_(new TsWriter()),
       pes_packet_generator_(new PesPacketGenerator()) {}
 TsSegmenter::~TsSegmenter() {}
 
-Status TsSegmenter::Initialize(const StreamInfo& stream_info,
-                               KeySource* encryption_key_source,
-                               uint32_t max_sd_pixels,
-                               double clear_lead_in_seconds) {
+Status TsSegmenter::Initialize(const StreamInfo& stream_info) {
   if (muxer_options_.segment_template.empty())
     return Status(error::MUXER_FAILURE, "Segment template not specified.");
-  if (!ts_writer_->Initialize(stream_info))
-    return Status(error::MUXER_FAILURE, "Failed to initialize TsWriter.");
   if (!pes_packet_generator_->Initialize(stream_info)) {
     return Status(error::MUXER_FAILURE,
                   "Failed to initialize PesPacketGenerator.");
   }
 
-  if (encryption_key_source) {
-    std::unique_ptr<EncryptionKey> encryption_key(new EncryptionKey());
-    const KeySource::TrackType type =
-        GetTrackTypeForEncryption(stream_info, max_sd_pixels);
-    Status status = encryption_key_source->GetKey(type, encryption_key.get());
-
-    if (encryption_key->iv.empty()) {
-      if (!AesCryptor::GenerateRandomIv(FOURCC_cbcs, &encryption_key->iv)) {
-        return Status(error::INTERNAL_ERROR, "Failed to generate random iv.");
-      }
-    }
-    if (!status.ok())
-      return status;
-
-    encryption_key_ = std::move(encryption_key);
-    clear_lead_in_seconds_ = clear_lead_in_seconds;
-
-    if (listener_) {
-      // For now this only happens once, so send true.
-      const bool kIsInitialEncryptionInfo = true;
-      listener_->OnEncryptionInfoReady(
-          kIsInitialEncryptionInfo, FOURCC_cbcs, encryption_key_->key_id,
-          encryption_key_->iv, encryption_key_->key_system_info);
-    }
-
-    status = NotifyEncrypted();
-    if (!status.ok())
-      return status;
+  const StreamType stream_type = stream_info.stream_type();
+  if (stream_type != StreamType::kStreamVideo &&
+      stream_type != StreamType::kStreamAudio) {
+    LOG(ERROR) << "TsWriter cannot handle stream type " << stream_type
+               << " yet.";
+    return Status(error::MUXER_FAILURE, "Unsupported stream type.");
   }
+
+  codec_ = stream_info.codec();
+  if (stream_type == StreamType::kStreamAudio)
+    audio_codec_config_ = stream_info.codec_config();
 
   timescale_scale_ = kTsTimescale / stream_info.time_scale();
   return Status::OK;
 }
 
 Status TsSegmenter::Finalize() {
-  return Flush();
+  return Status::OK;
 }
 
-// First checks whether the sample is a key frame. If so and the segment has
-// passed the segment duration, then flush the generator and write all the data
-// to file.
-Status TsSegmenter::AddSample(scoped_refptr<MediaSample> sample) {
-  const bool passed_segment_duration =
-      current_segment_total_sample_duration_ > muxer_options_.segment_duration;
-  if (sample->is_key_frame() && passed_segment_duration) {
-    Status status = Flush();
-    if (!status.ok())
-      return status;
+Status TsSegmenter::AddSample(const MediaSample& sample) {
+  if (!ts_writer_) {
+    std::unique_ptr<ProgramMapTableWriter> pmt_writer;
+    if (codec_ == kCodecAC3) {
+      // https://goo.gl/N7Tvqi MPEG-2 Stream Encryption Format for HTTP Live
+      // Streaming 2.3.2.2 AC-3 Setup: For AC-3, the setup_data in the
+      // audio_setup_information is the first 10 bytes of the audio data (the
+      // syncframe()).
+      // For unencrypted AC3, the setup_data is not used, so what is in there
+      // does not matter.
+      const size_t kSetupDataSize = 10u;
+      if (sample.data_size() < kSetupDataSize) {
+        LOG(ERROR) << "Sample is too small for AC3: " << sample.data_size();
+        return Status(error::MUXER_FAILURE, "Sample is too small for AC3.");
+      }
+      const std::vector<uint8_t> setup_data(sample.data(),
+                                            sample.data() + kSetupDataSize);
+      pmt_writer.reset(new AudioProgramMapTableWriter(codec_, setup_data));
+    } else if (IsAudioCodec(codec_)) {
+      pmt_writer.reset(
+          new AudioProgramMapTableWriter(codec_, audio_codec_config_));
+    } else {
+      DCHECK(IsVideoCodec(codec_));
+      pmt_writer.reset(new VideoProgramMapTableWriter(codec_));
+    }
+    ts_writer_.reset(new TsWriter(std::move(pmt_writer)));
   }
 
-  if (!ts_writer_file_opened_ && !sample->is_key_frame())
+  if (sample.is_encrypted())
+    ts_writer_->SignalEncrypted();
+
+  if (!ts_writer_file_opened_ && !sample.is_key_frame())
     LOG(WARNING) << "A segment will start with a non key frame.";
 
   if (!pes_packet_generator_->PushSample(sample)) {
     return Status(error::MUXER_FAILURE,
                   "Failed to add sample to PesPacketGenerator.");
   }
-
-  const double scaled_sample_duration = sample->duration() * timescale_scale_;
-  current_segment_total_sample_duration_ +=
-      scaled_sample_duration / kTsTimescale;
-
   return WritePesPacketsToFile();
 }
 
@@ -130,7 +129,6 @@ Status TsSegmenter::OpenNewSegmentIfClosed(uint32_t next_pts) {
                      segment_number_++, muxer_options_.bandwidth);
   if (!ts_writer_->NewSegment(segment_name))
     return Status(error::MUXER_FAILURE, "Failed to initilize TsPacketWriter.");
-  current_segment_start_time_ = next_pts;
   current_segment_path_ = segment_name;
   ts_writer_file_opened_ = true;
   return Status::OK;
@@ -145,13 +143,29 @@ Status TsSegmenter::WritePesPacketsToFile() {
     if (!status.ok())
       return status;
 
-    if (!ts_writer_->AddPesPacket(std::move(pes_packet)))
-      return Status(error::MUXER_FAILURE, "Failed to add PES packet.");
+    if (listener_ && IsVideoCodec(codec_) && pes_packet->is_key_frame()) {
+      base::Optional<uint64_t> start_pos = ts_writer_->GetFilePosition();
+
+      const int64_t timestamp = pes_packet->pts();
+      if (!ts_writer_->AddPesPacket(std::move(pes_packet)))
+        return Status(error::MUXER_FAILURE, "Failed to add PES packet.");
+
+      base::Optional<uint64_t> end_pos = ts_writer_->GetFilePosition();
+      if (!start_pos || !end_pos) {
+        return Status(error::MUXER_FAILURE,
+                      "Failed to get file position in WritePesPacketsToFile.");
+      }
+      listener_->OnKeyFrame(timestamp, *start_pos, *end_pos - *start_pos);
+    } else {
+      if (!ts_writer_->AddPesPacket(std::move(pes_packet)))
+        return Status(error::MUXER_FAILURE, "Failed to add PES packet.");
+    }
   }
   return Status::OK;
 }
 
-Status TsSegmenter::Flush() {
+Status TsSegmenter::FinalizeSegment(uint64_t start_timestamp,
+                                    uint64_t duration) {
   if (!pes_packet_generator_->Flush()) {
     return Status(error::MUXER_FAILURE,
                   "Failed to flush PesPacketGenerator.");
@@ -169,28 +183,13 @@ Status TsSegmenter::Flush() {
     if (listener_) {
       const int64_t file_size =
           File::GetFileSize(current_segment_path_.c_str());
-      listener_->OnNewSegment(
-          current_segment_path_, current_segment_start_time_,
-          current_segment_total_sample_duration_ * kTsTimescale, file_size);
+      listener_->OnNewSegment(current_segment_path_,
+                              start_timestamp * timescale_scale_,
+                              duration * timescale_scale_, file_size);
     }
     ts_writer_file_opened_ = false;
-    total_duration_in_seconds_ += current_segment_total_sample_duration_;
   }
-  current_segment_total_sample_duration_ = 0.0;
-  current_segment_start_time_ = 0;
   current_segment_path_.clear();
-  return NotifyEncrypted();
-}
-
-Status TsSegmenter::NotifyEncrypted() {
-  if (encryption_key_ && total_duration_in_seconds_ >= clear_lead_in_seconds_) {
-    if (listener_)
-      listener_->OnEncryptionStart();
-
-    if (!pes_packet_generator_->SetEncryptionKey(std::move(encryption_key_)))
-      return Status(error::INTERNAL_ERROR, "Failed to set encryption key.");
-    ts_writer_->SignalEncrypted();
-  }
   return Status::OK;
 }
 

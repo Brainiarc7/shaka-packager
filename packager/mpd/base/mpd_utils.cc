@@ -6,41 +6,68 @@
 
 #include "packager/mpd/base/mpd_utils.h"
 
+#include <gflags/gflags.h>
 #include <libxml/tree.h>
 
+#include "packager/base/base64.h"
 #include "packager/base/logging.h"
 #include "packager/base/strings/string_number_conversions.h"
+#include "packager/base/strings/string_util.h"
+#include "packager/media/base/language_utils.h"
+#include "packager/mpd/base/adaptation_set.h"
+#include "packager/mpd/base/content_protection_element.h"
+#include "packager/mpd/base/representation.h"
 #include "packager/mpd/base/xml/scoped_xml_ptr.h"
+
+DEFINE_bool(
+    use_legacy_vp9_codec_string,
+    false,
+    "Use legacy vp9 codec string 'vp9' if set to true; otherwise new style "
+    "vp09.xx.xx.xx... codec string will be used. Default to false as indicated "
+    "in https://github.com/google/shaka-packager/issues/406, all major "
+    "browsers and platforms already support the new 'vp09' codec string.");
 
 namespace shaka {
 namespace {
 
+bool IsKeyRotationDefaultKeyId(const std::string& key_id) {
+  for (char c : key_id) {
+    if (c != '\0')
+      return false;
+  }
+  return true;
+}
+
 std::string TextCodecString(const MediaInfo& media_info) {
   CHECK(media_info.has_text_info());
-  const std::string& format = media_info.text_info().format();
-  // DASH IOP mentions that the codec for ttml in mp4 is stpp.
-  if (format == "ttml" &&
-      (media_info.container_type() == MediaInfo::CONTAINER_MP4)) {
+  const auto container_type = media_info.container_type();
+
+  // Codecs are not needed when mimeType is "text/*". Having a codec would be
+  // redundant.
+  if (container_type == MediaInfo::CONTAINER_TEXT) {
+    return "";
+  }
+
+  // DASH IOP mentions that the codec for ttml in mp4 is stpp, so override
+  // the default codec value.
+  const std::string& codec = media_info.text_info().codec();
+  if (codec == "ttml" && container_type == MediaInfo::CONTAINER_MP4) {
     return "stpp";
   }
 
-  // Otherwise codec doesn't need to be specified, e.g. vtt and ttml+xml are
-  // obvious from the mime type.
-  return "";
+  return codec;
 }
 
 }  // namespace
 
 bool HasVODOnlyFields(const MediaInfo& media_info) {
   return media_info.has_init_range() || media_info.has_index_range() ||
-         media_info.has_media_file_name() ||
-         media_info.has_media_duration_seconds();
+         media_info.has_media_file_url();
 }
 
 bool HasLiveOnlyFields(const MediaInfo& media_info) {
-  return media_info.has_init_segment_name() ||
-         media_info.has_segment_template() ||
-         media_info.has_segment_duration_seconds();
+  return media_info.has_init_segment_url() ||
+         media_info.has_segment_template_url();
 }
 
 void RemoveDuplicateAttributes(
@@ -63,7 +90,7 @@ std::string GetLanguage(const MediaInfo& media_info) {
   } else if (media_info.has_text_info()) {
     lang = media_info.text_info().language();
   }
-  return lang;
+  return LanguageToShortestForm(lang);
 }
 
 std::string GetCodecs(const MediaInfo& media_info) {
@@ -79,8 +106,10 @@ std::string GetCodecs(const MediaInfo& media_info) {
       // new codec strings.
       if (codec == "vp08")
         return "vp8";
-      if (codec == "vp09")
-        return "vp9";
+      if (FLAGS_use_legacy_vp9_codec_string) {
+        if (codec == "vp09")
+          return "vp9";
+      }
     }
     return media_info.video_info().codec();
   }
@@ -102,7 +131,7 @@ std::string GetBaseCodec(const MediaInfo& media_info) {
   } else if (media_info.has_audio_info()) {
     codec = media_info.audio_info().codec();
   } else if (media_info.has_text_info()) {
-    codec = media_info.text_info().format();
+    codec = media_info.text_info().codec();
   }
   // Convert, for example, "mp4a.40.2" to simply "mp4a".
   // "mp4a.40.2" and "mp4a.40.5" can exist in the same AdaptationSet.
@@ -133,10 +162,21 @@ std::string GetAdaptationSetKey(const MediaInfo& media_info) {
   key.append(":");
   key.append(GetLanguage(media_info));
 
+  // Trick play streams of the same original stream, but possibly with
+  // different trick_play_factors, belong to the same trick play AdaptationSet.
+  if (media_info.video_info().has_playback_rate()) {
+    key.append(":trick_play");
+  }
+
   return key;
 }
 
 std::string SecondsToXmlDuration(double seconds) {
+  // Chrome internally uses time accurate to microseconds, which is implemented
+  // per MSE spec (https://www.w3.org/TR/media-source/).
+  // We need a string formatter that has at least microseconds accuracy for a
+  // normal video (with duration up to 3 hours). Chrome's DoubleToString
+  // implementation meets the requirement.
   return "PT" + base::DoubleToString(seconds) + "S";
 }
 
@@ -164,10 +204,12 @@ bool MoreThanOneTrue(bool b1, bool b2, bool b3) {
   return (b1 && b2) || (b2 && b3) || (b3 && b1);
 }
 
-bool AtLeastOneTrue(bool b1, bool b2, bool b3) { return b1 || b2 || b3; }
+bool AtLeastOneTrue(bool b1, bool b2, bool b3) {
+  return b1 || b2 || b3;
+}
 
 bool OnlyOneTrue(bool b1, bool b2, bool b3) {
-    return !MoreThanOneTrue(b1, b2, b3) && AtLeastOneTrue(b1, b2, b3);
+  return !MoreThanOneTrue(b1, b2, b3) && AtLeastOneTrue(b1, b2, b3);
 }
 
 // Coverts binary data into human readable UUID format.
@@ -278,7 +320,8 @@ void AddContentProtectionElementsHelperTemplated(
   const bool is_mp4_container =
       media_info.container_type() == MediaInfo::CONTAINER_MP4;
   std::string key_id_uuid_format;
-  if (protected_content.has_default_key_id()) {
+  if (protected_content.has_default_key_id() &&
+      !IsKeyRotationDefaultKeyId(protected_content.default_key_id())) {
     if (!HexToUUID(protected_content.default_key_id(), &key_id_uuid_format)) {
       LOG(ERROR) << "Failed to convert default key ID into UUID format.";
     }
@@ -296,10 +339,7 @@ void AddContentProtectionElementsHelperTemplated(
     parent->AddContentProtectionElement(mp4_content_protection);
   }
 
-  for (int i = 0; i < protected_content.content_protection_entry().size();
-       ++i) {
-    const MediaInfo::ProtectedContent::ContentProtectionEntry& entry =
-        protected_content.content_protection_entry(i);
+  for (const auto& entry : protected_content.content_protection_entry()) {
     if (!entry.has_uuid()) {
       LOG(WARNING)
           << "ContentProtectionEntry was specified but no UUID is set for "
@@ -331,8 +371,9 @@ void AddContentProtectionElementsHelperTemplated(
     parent->AddContentProtectionElement(drm_content_protection);
   }
 
-  LOG_IF(WARNING, protected_content.content_protection_entry().size() == 0)
-      << "The media is encrypted but no content protection specified.";
+  VLOG_IF(1, protected_content.content_protection_entry().size() == 0)
+      << "The media is encrypted but no content protection specified (can "
+         "happen with key rotation).";
 }
 }  // namespace
 
@@ -345,6 +386,5 @@ void AddContentProtectionElements(const MediaInfo& media_info,
                                   AdaptationSet* parent) {
   AddContentProtectionElementsHelperTemplated(media_info, parent);
 }
-
 
 }  // namespace shaka

@@ -20,15 +20,21 @@ enum FourCC : uint32_t {
 
   FOURCC_aacd = 0x61616364,
   FOURCC_ac_3 = 0x61632d33,  // "ac-3"
+  FOURCC_ac3d = 0x61633364,
   FOURCC_apad = 0x61706164,
   FOURCC_avc1 = 0x61766331,
+  FOURCC_avc3 = 0x61766333,
   FOURCC_avcC = 0x61766343,
   FOURCC_bloc = 0x626C6F63,
   FOURCC_cbc1 = 0x63626331,
+  // This is a fake protection scheme fourcc code to indicate Apple Sample AES.
+  FOURCC_cbca = 0x63626361,
   FOURCC_cbcs = 0x63626373,
   FOURCC_cenc = 0x63656e63,
   FOURCC_cens = 0x63656e73,
   FOURCC_co64 = 0x636f3634,
+  FOURCC_cmfc = 0x636d6663,
+  FOURCC_cmfs = 0x636d6673,
   FOURCC_ctim = 0x6374696d,
   FOURCC_ctts = 0x63747473,
   FOURCC_dOps = 0x644f7073,
@@ -36,6 +42,7 @@ enum FourCC : uint32_t {
   FOURCC_dash = 0x64617368,
   FOURCC_ddts = 0x64647473,
   FOURCC_dec3 = 0x64656333,
+  FOURCC_dfLa = 0x64664c61,
   FOURCC_dinf = 0x64696e66,
   FOURCC_dref = 0x64726566,
   FOURCC_dtsc = 0x64747363,
@@ -45,11 +52,13 @@ enum FourCC : uint32_t {
   FOURCC_dtsm = 0x6474732d,  // "dts-"
   FOURCC_dtsp = 0x6474732b,  // "dts+"
   FOURCC_ec_3 = 0x65632d33,  // "ec-3"
+  FOURCC_ec3d = 0x65633364,
   FOURCC_edts = 0x65647473,
   FOURCC_elst = 0x656c7374,
   FOURCC_enca = 0x656e6361,
   FOURCC_encv = 0x656e6376,
   FOURCC_esds = 0x65736473,
+  FOURCC_fLaC = 0x664c6143,
   FOURCC_free = 0x66726565,
   FOURCC_frma = 0x66726d61,
   FOURCC_ftyp = 0x66747970,
@@ -60,6 +69,8 @@ enum FourCC : uint32_t {
   FOURCC_hvcC = 0x68766343,
   FOURCC_iden = 0x6964656e,
   FOURCC_iso6 = 0x69736f36,
+  FOURCC_iso8 = 0x69736f38,
+  FOURCC_isom = 0x69736f6d,
   FOURCC_iods = 0x696f6473,
   FOURCC_mdat = 0x6d646174,
   FOURCC_mdhd = 0x6d646864,
@@ -120,8 +131,8 @@ enum FourCC : uint32_t {
   FOURCC_trex = 0x74726578,
   FOURCC_trun = 0x7472756e,
   FOURCC_udta = 0x75647461,
-  FOURCC_url  = 0x75726c20,  // "url "
-  FOURCC_urn  = 0x75726e20,  // "urn "
+  FOURCC_url = 0x75726c20,  // "url "
+  FOURCC_urn = 0x75726e20,  // "urn "
   FOURCC_uuid = 0x75756964,
   FOURCC_vide = 0x76696465,
   FOURCC_vlab = 0x766c6162,
@@ -138,9 +149,14 @@ enum FourCC : uint32_t {
   FOURCC_wide = 0x77696465,
   FOURCC_wvtt = 0x77767474,
   FOURCC_zaac = 0x7A616163,
+  FOURCC_zac3 = 0x7A616333,
   FOURCC_zach = 0x7A616368,
   FOURCC_zacp = 0x7A616370,
+  FOURCC_zavc = 0x7A617663,
+  FOURCC_zec3 = 0x7A656333,
 };
+
+const FourCC kAppleSampleAesProtectionScheme = FOURCC_cbca;
 
 const inline std::string FourCCToString(FourCC fourcc) {
   char buf[5];

@@ -4,8 +4,8 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_FORMATS_MP2T_ES_PARSER_H265_H_
-#define MEDIA_FORMATS_MP2T_ES_PARSER_H265_H_
+#ifndef PACKAGER_MEDIA_FORMATS_MP2T_ES_PARSER_H265_H_
+#define PACKAGER_MEDIA_FORMATS_MP2T_ES_PARSER_H265_H_
 
 #include <stdint.h>
 
@@ -35,11 +35,8 @@ class EsParserH265 : public EsParserH26x {
   void Reset() override;
 
  private:
-  // Processes a NAL unit found in ParseInternal.  The @a pps_id_for_access_unit
-  // value will be passed to UpdateVideoDecoderConfig.
-  bool ProcessNalu(const Nalu& nalu,
-                   bool* is_key_frame,
-                   int* pps_id_for_access_unit) override;
+  // Processes a NAL unit found in ParseInternal.
+  bool ProcessNalu(const Nalu& nalu, VideoSliceInfo* video_slice_info) override;
 
   // Update the video decoder config based on an H264 SPS.
   // Return true if successful.
@@ -49,7 +46,7 @@ class EsParserH265 : public EsParserH26x {
   NewStreamInfoCB new_stream_info_cb_;
 
   // Last video decoder config.
-  scoped_refptr<StreamInfo> last_video_decoder_config_;
+  std::shared_ptr<StreamInfo> last_video_decoder_config_;
   bool decoder_config_check_pending_;
 
   std::unique_ptr<H265Parser> h265_parser_;
@@ -59,4 +56,4 @@ class EsParserH265 : public EsParserH26x {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_FORMATS_MP2T_ES_PARSER_H265_H_
+#endif  // PACKAGER_MEDIA_FORMATS_MP2T_ES_PARSER_H265_H_

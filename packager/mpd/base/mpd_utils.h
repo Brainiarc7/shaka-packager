@@ -14,15 +14,11 @@
 #include <list>
 #include <string>
 
-#include "packager/base/base64.h"
-#include "packager/base/strings/string_util.h"
-#include "packager/mpd/base/content_protection_element.h"
-#include "packager/mpd/base/media_info.pb.h"
-#include "packager/mpd/base/mpd_builder.h"
-
 namespace shaka {
 
+class AdaptationSet;
 class MediaInfo;
+class Representation;
 struct ContentProtectionElement;
 struct SegmentInfo;
 
@@ -39,7 +35,7 @@ bool HasLiveOnlyFields(const MediaInfo& media_info);
 void RemoveDuplicateAttributes(
     ContentProtectionElement* content_protection_element);
 
-// Returns a language tag. May be blank for video.
+// Returns a language in ISO-639 shortest form. May be blank for video.
 std::string GetLanguage(const MediaInfo& media_info);
 
 // Returns a 'codecs' string that has all the video and audio codecs joined with

@@ -184,7 +184,7 @@ int WebMMediaParser::ParseInfoAndTracks(const uint8_t* data, int size) {
   double timecode_scale_in_us = info_parser.timecode_scale() / 1000.0;
   int64_t duration_in_us = info_parser.duration() * timecode_scale_in_us;
 
-  scoped_refptr<AudioStreamInfo> audio_stream_info =
+  std::shared_ptr<AudioStreamInfo> audio_stream_info =
       tracks_parser.audio_stream_info();
   if (audio_stream_info) {
     audio_stream_info->set_duration(duration_in_us);
@@ -192,7 +192,7 @@ int WebMMediaParser::ParseInfoAndTracks(const uint8_t* data, int size) {
     VLOG(1) << "No audio track info found.";
   }
 
-  scoped_refptr<VideoStreamInfo> video_stream_info =
+  std::shared_ptr<VideoStreamInfo> video_stream_info =
       tracks_parser.video_stream_info();
   if (video_stream_info) {
     video_stream_info->set_duration(duration_in_us);
@@ -207,6 +207,7 @@ int WebMMediaParser::ParseInfoAndTracks(const uint8_t* data, int size) {
 
   cluster_parser_.reset(new WebMClusterParser(
       info_parser.timecode_scale(), audio_stream_info, video_stream_info,
+      tracks_parser.vp_config(),
       tracks_parser.GetAudioDefaultDuration(timecode_scale_in_us),
       tracks_parser.GetVideoDefaultDuration(timecode_scale_in_us),
       tracks_parser.text_tracks(), tracks_parser.ignored_tracks(),
@@ -242,17 +243,19 @@ bool WebMMediaParser::FetchKeysIfNecessary(
   if (!decryption_key_source_)
     return true;
 
-  std::vector<std::vector<uint8_t>> key_ids;
+  Status status;
   if (!audio_encryption_key_id.empty()) {
-    key_ids.push_back(std::vector<uint8_t>(audio_encryption_key_id.begin(),
-                                           audio_encryption_key_id.end()));
+    status.Update(decryption_key_source_->FetchKeys(
+        EmeInitDataType::WEBM,
+        std::vector<uint8_t>(audio_encryption_key_id.begin(),
+                             audio_encryption_key_id.end())));
   }
   if (!video_encryption_key_id.empty()) {
-    key_ids.push_back(std::vector<uint8_t>(video_encryption_key_id.begin(),
-                                           video_encryption_key_id.end()));
+    status.Update(decryption_key_source_->FetchKeys(
+        EmeInitDataType::WEBM,
+        std::vector<uint8_t>(video_encryption_key_id.begin(),
+                             video_encryption_key_id.end())));
   }
-
-  Status status = decryption_key_source_->FetchKeys(key_ids);
   if (!status.ok()) {
     LOG(ERROR) << "Error fetching decryption keys: " << status;
     return false;

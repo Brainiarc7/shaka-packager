@@ -6,38 +6,19 @@
 
 #include "packager/media/formats/mp4/single_segment_segmenter.h"
 
-#include <inttypes.h>
-#include <openssl/err.h>
-#include <openssl/rand.h>
+#include <algorithm>
 
-#include "packager/base/files/file_util.h"
-#include "packager/base/strings/stringprintf.h"
-#include "packager/base/threading/platform_thread.h"
-#include "packager/base/time/time.h"
+#include "packager/file/file.h"
+#include "packager/file/file_util.h"
 #include "packager/media/base/buffer_writer.h"
-#include "packager/media/base/media_stream.h"
 #include "packager/media/base/muxer_options.h"
-#include "packager/media/event/muxer_listener.h"
 #include "packager/media/event/progress_listener.h"
-#include "packager/media/file/file.h"
 #include "packager/media/formats/mp4/box_definitions.h"
+#include "packager/media/formats/mp4/key_frame_info.h"
 
 namespace shaka {
 namespace media {
 namespace mp4 {
-namespace {
-// Create a temp file name using process/thread id and current time.
-std::string TempFileName() {
-  int32_t tid = static_cast<int32_t>(base::PlatformThread::CurrentId());
-  int64_t rand = 0;
-  if (RAND_bytes(reinterpret_cast<uint8_t*>(&rand), sizeof(rand)) != 1) {
-    LOG(WARNING) << "RAND_bytes failed with error: "
-                 << ERR_error_string(ERR_get_error(), NULL);
-    rand = base::Time::Now().ToInternalValue();
-  }
-  return base::StringPrintf("packager-tempfile-%x-%" PRIx64, tid, rand);
-}
-}  // namespace
 
 SingleSegmentSegmenter::SingleSegmentSegmenter(const MuxerOptions& options,
                                                std::unique_ptr<FileType> ftyp,
@@ -68,6 +49,22 @@ bool SingleSegmentSegmenter::GetIndexRange(size_t* offset, size_t* size) {
   return true;
 }
 
+std::vector<Range> SingleSegmentSegmenter::GetSegmentRanges() {
+  std::vector<Range> ranges;
+  uint64_t next_offset =
+      ftyp()->ComputeSize() + moov()->ComputeSize() + vod_sidx_->ComputeSize() +
+      vod_sidx_->first_offset;
+  for (const SegmentReference& segment_reference : vod_sidx_->references) {
+    Range r;
+    r.start = next_offset;
+    // Ranges are inclusive, so -1 to the size.
+    r.end = r.start + segment_reference.referenced_size - 1;
+    next_offset = r.end + 1;
+    ranges.push_back(r);
+  }
+  return ranges;
+}
+
 Status SingleSegmentSegmenter::DoInitialize() {
   // Single segment segmentation involves two stages:
   //   Stage 1: Create media subsegments from media samples
@@ -77,18 +74,8 @@ Status SingleSegmentSegmenter::DoInitialize() {
   // progress_target was set for stage 1. Times two to account for stage 2.
   set_progress_target(progress_target() * 2);
 
-  if (options().temp_dir.empty()) {
-    base::FilePath temp_file_path;
-    if (!base::CreateTemporaryFile(&temp_file_path)) {
-      LOG(ERROR) << "Failed to create temporary file.";
-      return Status(error::FILE_FAILURE, "Unable to create temporary file.");
-    }
-    temp_file_name_ = temp_file_path.AsUTF8Unsafe();
-  } else {
-    temp_file_name_ =
-      base::FilePath::FromUTF8Unsafe(options().temp_dir)
-        .Append(base::FilePath::FromUTF8Unsafe(TempFileName())).AsUTF8Unsafe();
-  }
+  if (!TempFilePath(options().temp_dir, &temp_file_name_))
+    return Status(error::FILE_FAILURE, "Unable to create temporary file.");
   temp_file_.reset(File::Open(temp_file_name_.c_str(), "w"));
   return temp_file_
              ? Status::OK
@@ -104,8 +91,10 @@ Status SingleSegmentSegmenter::DoFinalize() {
 
   // Close the temp file to prepare for reading later.
   if (!temp_file_.release()->Close()) {
-    return Status(error::FILE_FAILURE,
-                  "Cannot close the temp file " + temp_file_name_);
+    return Status(
+        error::FILE_FAILURE,
+        "Cannot close the temp file " + temp_file_name_ +
+            ", possibly file permission issue or running out of disk space.");
   }
 
   std::unique_ptr<File, FileCloser> file(
@@ -156,6 +145,16 @@ Status SingleSegmentSegmenter::DoFinalize() {
     UpdateProgress(static_cast<double>(size) / temp_file->Size() *
                    re_segment_progress_target);
   }
+  if (!temp_file.release()->Close()) {
+    return Status(error::FILE_FAILURE, "Cannot close the temp file " +
+                                           temp_file_name_ + " after reading.");
+  }
+  if (!file.release()->Close()) {
+    return Status(
+        error::FILE_FAILURE,
+        "Cannot close file " + options().output_file_name +
+            ", possibly file permission issue or running out of disk space.");
+  }
   SetComplete();
   return Status::OK;
 }
@@ -197,28 +196,19 @@ Status SingleSegmentSegmenter::DoFinalizeSegment() {
     vod_sidx_.reset(new SegmentIndex());
     vod_sidx_->reference_id = sidx()->reference_id;
     vod_sidx_->timescale = sidx()->timescale;
-
-    if (vod_ref.earliest_presentation_time > 0) {
-      const double starting_time_in_seconds =
-          static_cast<double>(vod_ref.earliest_presentation_time) /
-          GetReferenceTimeScale();
-      // Give a warning if it is significant.
-      if (starting_time_in_seconds > 0.5) {
-        // Note that DASH IF player requires presentationTimeOffset to be set in
-        // Segment{Base,List,Template} if there is non-zero starting time. Since
-        // current Chromium's MSE implementation uses DTS, the player expects
-        // DTS to be used.
-        LOG(WARNING) << "Warning! Non-zero starting time (in seconds): "
-                     << starting_time_in_seconds
-                     << ". Manual adjustment of presentationTimeOffset in "
-                        "mpd might be necessary.";
-      }
-    }
-    // Force earliest_presentation_time to start from 0 for VOD.
-    vod_sidx_->earliest_presentation_time = 0;
+    vod_sidx_->earliest_presentation_time = vod_ref.earliest_presentation_time;
   }
   vod_sidx_->references.push_back(vod_ref);
 
+  if (muxer_listener()) {
+    for (const KeyFrameInfo& key_frame_info : key_frame_infos()) {
+      // Unlike multisegment-segmenter, there is no (sub)segment header (styp,
+      // sidx), so this is already the offset within the (sub)segment.
+      muxer_listener()->OnKeyFrame(key_frame_info.timestamp,
+                                   key_frame_info.start_byte_offset,
+                                   key_frame_info.size);
+    }
+  }
   // Append fragment buffer to temp file.
   size_t segment_size = fragment_buffer()->Size();
   Status status = fragment_buffer()->WriteToFile(temp_file_.get());

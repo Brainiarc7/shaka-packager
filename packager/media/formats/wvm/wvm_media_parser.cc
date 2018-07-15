@@ -13,12 +13,12 @@
 #include "packager/media/base/audio_stream_info.h"
 #include "packager/media/base/key_source.h"
 #include "packager/media/base/media_sample.h"
-#include "packager/media/base/status.h"
 #include "packager/media/base/video_stream_info.h"
 #include "packager/media/codecs/aac_audio_specific_config.h"
 #include "packager/media/codecs/avc_decoder_configuration_record.h"
 #include "packager/media/codecs/es_descriptor.h"
 #include "packager/media/formats/mp2t/adts_header.h"
+#include "packager/status.h"
 
 #define HAS_HEADER_EXTENSION(x) ((x != 0xBC) && (x != 0xBE) && (x != 0xBF) \
          && (x != 0xF0) && (x != 0xF2) && (x != 0xF8) \
@@ -48,7 +48,6 @@ const uint32_t kPesStreamIdVideo = 0xE0;
 const uint32_t kPesStreamIdAudioMask = 0xE0;
 const uint32_t kPesStreamIdAudio = 0xC0;
 const uint32_t kVersion4 = 4;
-const int kAdtsHeaderMinSize = 7;
 const uint8_t kAacSampleSizeBits = 16;
 // Applies to all video streams.
 const uint8_t kNaluLengthSize = 4;  // unit is bytes.
@@ -108,8 +107,7 @@ WvmMediaParser::WvmMediaParser()
       media_sample_(NULL),
       crypto_unit_start_pos_(0),
       stream_id_count_(0),
-      decryption_key_source_(NULL) {
-}
+      decryption_key_source_(NULL) {}
 
 WvmMediaParser::~WvmMediaParser() {}
 
@@ -125,8 +123,8 @@ void WvmMediaParser::Init(const InitCB& init_cb,
 }
 
 bool WvmMediaParser::Parse(const uint8_t* buf, int size) {
-  uint32_t num_bytes, prev_size;
-  num_bytes = prev_size = 0;
+  size_t num_bytes = 0;
+  size_t prev_size = 0;
   const uint8_t* read_ptr = buf;
   const uint8_t* end = read_ptr + size;
 
@@ -208,7 +206,7 @@ bool WvmMediaParser::Parse(const uint8_t* buf, int size) {
         parse_state_ = SystemHeaderSkip;
         break;
       case PackHeaderStuffingSkip:
-        if ((end - read_ptr) >= (int32_t)skip_bytes_) {
+        if (end >= skip_bytes_ + read_ptr) {
           read_ptr += skip_bytes_;
           skip_bytes_ = 0;
           parse_state_ = StartCode1;
@@ -218,7 +216,7 @@ bool WvmMediaParser::Parse(const uint8_t* buf, int size) {
         }
         continue;
       case SystemHeaderSkip:
-        if ((end - read_ptr) >= (int32_t)skip_bytes_) {
+        if (end >= skip_bytes_ + read_ptr) {
           read_ptr += skip_bytes_;
           skip_bytes_ = 0;
           parse_state_ = StartCode1;
@@ -250,6 +248,7 @@ bool WvmMediaParser::Parse(const uint8_t* buf, int size) {
         if (HAS_HEADER_EXTENSION(pes_stream_id_)) {
           parse_state_ = PesExtension1;
         } else {
+          prev_pes_flags_1_ = pes_flags_1_;
           pes_flags_1_ = pes_flags_2_ = 0;
           pes_header_data_bytes_ = 0;
           parse_state_ = PesPayload;
@@ -487,8 +486,9 @@ bool WvmMediaParser::Parse(const uint8_t* buf, int size) {
   return true;
 }
 
-bool WvmMediaParser::EmitLastSample(uint32_t stream_id,
-                                    scoped_refptr<MediaSample>& new_sample) {
+bool WvmMediaParser::EmitLastSample(
+    uint32_t stream_id,
+    const std::shared_ptr<MediaSample>& new_sample) {
   std::string key = base::UintToString(current_program_id_)
                         .append(":")
                         .append(base::UintToString(stream_id));
@@ -573,7 +573,7 @@ bool WvmMediaParser::ParseIndexEntry() {
     }
 
     uint64_t track_duration = 0;
-    int16_t trick_play_rate = 0;
+    uint32_t trick_play_factor = 0;
     uint32_t sampling_frequency = kDefaultSamplingFrequency;
     uint32_t time_scale = kMpeg2ClockRate;
     uint16_t video_width = 0;
@@ -679,8 +679,8 @@ bool WvmMediaParser::ParseIndexEntry() {
         case TrackDuration:
           track_duration = value;
           break;
-        case TrackTrickPlayRate:
-          trick_play_rate = value;
+        case TrackTrickPlayFactor:
+          trick_play_factor = value;
           break;
         case VideoStreamId:
           video_pes_stream_id = value;
@@ -738,12 +738,13 @@ bool WvmMediaParser::ParseIndexEntry() {
     index_size = read_ptr - index_data_.data();
 
     if (has_video) {
-      Codec video_codec = kCodecH264;
-      stream_infos_.push_back(new VideoStreamInfo(
-          stream_id_count_, time_scale, track_duration, video_codec,
-          std::string(), video_codec_config.data(), video_codec_config.size(),
-          video_width, video_height, pixel_width, pixel_height, trick_play_rate,
-          nalu_length_size, std::string(), true));
+      stream_infos_.emplace_back(new VideoStreamInfo(
+          stream_id_count_, time_scale, track_duration, kCodecH264,
+          byte_to_unit_stream_converter_.stream_format(), std::string(),
+          video_codec_config.data(), video_codec_config.size(), video_width,
+          video_height, pixel_width, pixel_height, trick_play_factor,
+          nalu_length_size, std::string(),
+          decryption_key_source_ ? false : true));
       program_demux_stream_map_[base::UintToString(index_program_id_) + ":" +
                                 base::UintToString(
                                     video_pes_stream_id
@@ -754,12 +755,13 @@ bool WvmMediaParser::ParseIndexEntry() {
     if (has_audio) {
       const Codec audio_codec = kCodecAAC;
       // TODO(beil): Pass in max and average bitrate in wvm container.
-      stream_infos_.push_back(new AudioStreamInfo(
+      stream_infos_.emplace_back(new AudioStreamInfo(
           stream_id_count_, time_scale, track_duration, audio_codec,
           std::string(), audio_codec_config.data(), audio_codec_config.size(),
           kAacSampleSizeBits, num_channels, sampling_frequency,
           0 /* seek preroll */, 0 /* codec delay */, 0 /* max bitrate */,
-          0 /* avg bitrate */, std::string(), true));
+          0 /* avg bitrate */, std::string(),
+          decryption_key_source_ ? false : true));
       program_demux_stream_map_[base::UintToString(index_program_id_) + ":" +
                                 base::UintToString(
                                     audio_pes_stream_id
@@ -813,7 +815,7 @@ void WvmMediaParser::StartMediaSampleDemux() {
 
 bool WvmMediaParser::Output(bool output_encrypted_sample) {
   if (output_encrypted_sample) {
-    media_sample_->set_data(sample_data_.data(), sample_data_.size());
+    media_sample_->SetData(sample_data_.data(), sample_data_.size());
     media_sample_->set_is_encrypted(true);
   } else {
     if ((prev_pes_stream_id_ & kPesStreamIdVideoMask) == kPesStreamIdVideo) {
@@ -824,7 +826,7 @@ bool WvmMediaParser::Output(bool output_encrypted_sample) {
         LOG(ERROR) << "Could not convert h.264 byte stream sample";
         return false;
       }
-      media_sample_->set_data(nal_unit_stream.data(), nal_unit_stream.size());
+      media_sample_->SetData(nal_unit_stream.data(), nal_unit_stream.size());
       if (!is_initialized_) {
         // Set extra data for video stream from AVC Decoder Config Record.
         // Also, set codec string from the AVC Decoder Config Record.
@@ -858,7 +860,13 @@ bool WvmMediaParser::Output(bool output_encrypted_sample) {
                 return false;
               }
             }
-            video_stream_info->set_codec_string(avc_config.GetCodecString());
+            const FourCC codec_fourcc =
+                byte_to_unit_stream_converter_.stream_format() ==
+                        H26xStreamFormat::kNalUnitStreamWithParameterSetNalus
+                    ? FOURCC_avc3
+                    : FOURCC_avc1;
+            video_stream_info->set_codec_string(
+                avc_config.GetCodecString(codec_fourcc));
 
             if (avc_config.pixel_width() != video_stream_info->pixel_width() ||
                 avc_config.pixel_height() !=
@@ -895,18 +903,15 @@ bool WvmMediaParser::Output(bool output_encrypted_sample) {
     } else if ((prev_pes_stream_id_ & kPesStreamIdAudioMask) ==
         kPesStreamIdAudio) {
       // Set data on the audio stream.
-      int frame_size = mp2t::AdtsHeader::GetAdtsFrameSize(sample_data_.data(),
-                                                          kAdtsHeaderMinSize);
       mp2t::AdtsHeader adts_header;
       const uint8_t* frame_ptr = sample_data_.data();
-      if (!adts_header.Parse(frame_ptr, frame_size)) {
+      if (!adts_header.Parse(frame_ptr, sample_data_.size())) {
         LOG(ERROR) << "Could not parse ADTS header";
         return false;
       }
-      size_t header_size = adts_header.GetAdtsHeaderSize(frame_ptr,
-                                                         frame_size);
-      media_sample_->set_data(frame_ptr + header_size,
-                              frame_size - header_size);
+      media_sample_->SetData(
+          frame_ptr + adts_header.GetHeaderSize(),
+          adts_header.GetFrameSize() - adts_header.GetHeaderSize());
       if (!is_initialized_) {
         for (uint32_t i = 0; i < stream_infos_.size(); i++) {
           if (stream_infos_[i]->stream_type() == kStreamAudio &&
@@ -919,10 +924,7 @@ bool WvmMediaParser::Output(bool output_encrypted_sample) {
               audio_stream_info->set_sampling_frequency(
                   adts_header.GetSamplingFrequency());
               std::vector<uint8_t> audio_specific_config;
-              if (!adts_header.GetAudioSpecificConfig(&audio_specific_config)) {
-                LOG(ERROR) << "Could not compute AACaudiospecificconfig";
-                return false;
-              }
+              adts_header.GetAudioSpecificConfig(&audio_specific_config);
               audio_stream_info->set_codec_config(audio_specific_config);
               audio_stream_info->set_codec_string(
                   AudioStreamInfo::GetCodecString(
@@ -935,10 +937,11 @@ bool WvmMediaParser::Output(bool output_encrypted_sample) {
                 LOG(ERROR) << "Could not parse AACAudioSpecificconfig";
                 return false;
               }
-              audio_stream_info->set_sampling_frequency(aac_config.frequency());
+              audio_stream_info->set_sampling_frequency(
+                  aac_config.GetSamplesPerSecond());
               audio_stream_info->set_codec_string(
                   AudioStreamInfo::GetCodecString(
-                      kCodecAAC, aac_config.audio_object_type()));
+                      kCodecAAC, aac_config.GetAudioObjectType()));
             }
           }
         }
@@ -994,7 +997,7 @@ bool WvmMediaParser::Output(bool output_encrypted_sample) {
 
 bool WvmMediaParser::EmitSample(uint32_t parsed_audio_or_video_stream_id,
                                 uint32_t stream_id,
-                                scoped_refptr<MediaSample>& new_sample,
+                                const std::shared_ptr<MediaSample>& new_sample,
                                 bool isLastSample) {
   DCHECK(new_sample);
   if (isLastSample) {
@@ -1054,21 +1057,23 @@ bool WvmMediaParser::EmitSample(uint32_t parsed_audio_or_video_stream_id,
   return true;
 }
 
-bool WvmMediaParser::GetAssetKey(const uint32_t asset_id,
+bool WvmMediaParser::GetAssetKey(const uint8_t* asset_id,
                                  EncryptionKey* encryption_key) {
   DCHECK(decryption_key_source_);
-  Status status = decryption_key_source_->FetchKeys(asset_id);
+  Status status = decryption_key_source_->FetchKeys(
+      EmeInitDataType::WIDEVINE_CLASSIC,
+      std::vector<uint8_t>(asset_id, asset_id + sizeof(uint32_t)));
   if (!status.ok()) {
-    LOG(ERROR) << "Fetch Key(s) failed for AssetID = " << asset_id
-               << ", error = " << status;
+    LOG(ERROR) << "Fetch Key(s) failed for AssetID = "
+               << ntohlFromBuffer(asset_id) << ", error = " << status;
     return false;
   }
 
-  status = decryption_key_source_->GetKey(KeySource::TRACK_TYPE_HD,
-                                          encryption_key);
+  const char kHdStreamLabel[] = "HD";
+  status = decryption_key_source_->GetKey(kHdStreamLabel, encryption_key);
   if (!status.ok()) {
-    LOG(ERROR) << "Fetch Key(s) failed for AssetID = " << asset_id
-               << ", error = " << status;
+    LOG(ERROR) << "Fetch Key(s) failed for AssetID = "
+               << ntohlFromBuffer(asset_id) << ", error = " << status;
     return false;
   }
 
@@ -1093,22 +1098,17 @@ bool WvmMediaParser::ProcessEcm() {
   ecm_data += sizeof(uint32_t);  // old version field - skip.
   ecm_data += sizeof(uint32_t);  // clear lead - skip.
   ecm_data += sizeof(uint32_t);  // system id(includes ECM version) - skip.
-  uint32_t asset_id = ntohlFromBuffer(ecm_data);
-  if (asset_id == 0) {
-    LOG(ERROR) << "AssetID in ECM is not valid.";
-    return false;
-  }
-  ecm_data += sizeof(uint32_t);  // asset_id.
   EncryptionKey encryption_key;
-  if (!GetAssetKey(asset_id, &encryption_key)) {
+  if (!GetAssetKey(ecm_data, &encryption_key)) {
     return false;
   }
   if (encryption_key.key.size() < kAssetKeySizeBytes) {
     LOG(ERROR) << "Asset Key size of " << encryption_key.key.size()
-               << " for AssetID = " << asset_id
+               << " for AssetID = " << ntohlFromBuffer(ecm_data)
                << " is less than minimum asset key size.";
     return false;
   }
+  ecm_data += sizeof(uint32_t);  // asset_id.
   // Legacy WVM content may have asset keys > 16 bytes.
   // Use only the first 16 bytes of the asset key to get
   // the content key.

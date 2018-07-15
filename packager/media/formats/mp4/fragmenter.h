@@ -4,15 +4,14 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_FORMATS_MP4_FRAGMENTER_H_
-#define MEDIA_FORMATS_MP4_FRAGMENTER_H_
+#ifndef PACKAGER_MEDIA_FORMATS_MP4_FRAGMENTER_H_
+#define PACKAGER_MEDIA_FORMATS_MP4_FRAGMENTER_H_
 
 #include <memory>
 #include <vector>
 
 #include "packager/base/logging.h"
-#include "packager/base/memory/ref_counted.h"
-#include "packager/media/base/status.h"
+#include "packager/status.h"
 
 namespace shaka {
 namespace media {
@@ -23,6 +22,7 @@ class StreamInfo;
 
 namespace mp4 {
 
+struct KeyFrameInfo;
 struct SegmentReference;
 struct TrackFragment;
 
@@ -32,26 +32,28 @@ class Fragmenter {
  public:
   /// @param info contains stream information.
   /// @param traf points to a TrackFragment box.
-  Fragmenter(scoped_refptr<StreamInfo> info, TrackFragment* traf);
+  Fragmenter(std::shared_ptr<const StreamInfo> info, TrackFragment* traf);
 
-  virtual ~Fragmenter();
+  ~Fragmenter();
 
   /// Add a sample to the fragmenter.
   /// @param sample points to the sample to be added.
   /// @return OK on success, an error status otherwise.
-  virtual Status AddSample(scoped_refptr<MediaSample> sample);
+  Status AddSample(const MediaSample& sample);
 
   /// Initialize the fragment with default data.
   /// @param first_sample_dts specifies the decoding timestamp for the first
   ///        sample for this fragment.
   /// @return OK on success, an error status otherwise.
-  virtual Status InitializeFragment(int64_t first_sample_dts);
+  Status InitializeFragment(int64_t first_sample_dts);
 
   /// Finalize and optimize the fragment.
-  virtual void FinalizeFragment();
+  Status FinalizeFragment();
 
   /// Fill @a reference with current fragment information.
-  void GenerateSegmentReference(SegmentReference* reference);
+  void GenerateSegmentReference(SegmentReference* reference) const;
+
+  void ClearFragmentFinalized() { fragment_finalized_ = false; }
 
   uint64_t fragment_duration() const { return fragment_duration_; }
   uint64_t first_sap_time() const { return first_sap_time_; }
@@ -61,14 +63,17 @@ class Fragmenter {
   bool fragment_initialized() const { return fragment_initialized_; }
   bool fragment_finalized() const { return fragment_finalized_; }
   BufferWriter* data() { return data_.get(); }
+  const std::vector<KeyFrameInfo>& key_frame_infos() const {
+    return key_frame_infos_;
+  }
 
-  /// Set the flag use_decoding_timestamp_in_timeline, which if set to true, use
-  /// decoding timestamp instead of presentation timestamp in media timeline,
-  /// which is needed to workaround a Chromium bug that decoding timestamp is
-  /// used in buffered range, https://crbug.com/398130.
-  void set_use_decoding_timestamp_in_timeline(
-      bool use_decoding_timestamp_in_timeline) {
-    use_decoding_timestamp_in_timeline_ = use_decoding_timestamp_in_timeline;
+  /// Set the flag allow_use_adjust_earliest_presentation_time, which if set to
+  /// true, earlist_presentation_time (EPT) may be adjusted not to be smaller
+  /// than the decoding timestamp (dts) for the first fragment.
+  void set_allow_adjust_earliest_presentation_time(
+      bool allow_adjust_earliest_presentation_time) {
+    allow_adjust_earliest_presentation_time_ =
+        allow_adjust_earliest_presentation_time;
   }
 
  protected:
@@ -81,18 +86,23 @@ class Fragmenter {
   bool OptimizeSampleEntries(std::vector<T>* entries, T* default_value);
 
  private:
+  Status FinalizeFragmentForEncryption();
   // Check if the current fragment starts with SAP.
-  bool StartsWithSAP();
+  bool StartsWithSAP() const;
 
-  bool use_decoding_timestamp_in_timeline_;
+  std::shared_ptr<const StreamInfo> stream_info_;
   TrackFragment* traf_;
   uint64_t seek_preroll_;
   bool fragment_initialized_;
   bool fragment_finalized_;
   uint64_t fragment_duration_;
   int64_t earliest_presentation_time_;
+  bool first_fragment_ = true;
+  bool allow_adjust_earliest_presentation_time_ = false;
   int64_t first_sap_time_;
   std::unique_ptr<BufferWriter> data_;
+  // Saves key frames information, for Video.
+  std::vector<KeyFrameInfo> key_frame_infos_;
 
   DISALLOW_COPY_AND_ASSIGN(Fragmenter);
 };
@@ -120,4 +130,4 @@ bool Fragmenter::OptimizeSampleEntries(std::vector<T>* entries,
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_FORMATS_MP4_FRAGMENTER_H_
+#endif  // PACKAGER_MEDIA_FORMATS_MP4_FRAGMENTER_H_

@@ -197,6 +197,24 @@ static const ElementIdInfo kVideoIds[] = {
   {UINT, kWebMIdAspectRatioType},
   {BINARY, kWebMIdColorSpace},
   {FLOAT, kWebMIdFrameRate},
+  {LIST, kWebMIdColor},
+};
+
+static const ElementIdInfo kColorIds[] = {
+  {UINT, kWebMIdColorMatrixCoefficients},
+  {UINT, kWebMIdColorBitsPerChannel},
+  {UINT, kWebMIdColorChromaSubsamplingHorz},
+  {UINT, kWebMIdColorChromaSubsamplingVert},
+  {UINT, kWebMIdColorCbSamplingHorz},
+  {UINT, kWebMIdColorCbSamplingVert},
+  {UINT, kWebMIdColorChromaSitingHorz},
+  {UINT, kWebMIdColorChromaSitingVert},
+  {UINT, kWebMIdColorRange},
+  {UINT, kWebMIdColorTransferCharacteristics},
+  {UINT, kWebMIdColorPrimaries},
+  {UINT, kWebMIdColorMaxCLL},
+  {UINT, kWebMIdColorMaxFALL},
+  {LIST, kWebMIdColorMasteringMetadata},
 };
 
 static const ElementIdInfo kAudioIds[] = {
@@ -382,6 +400,7 @@ static const ListElementInfo kListElementInfo[] = {
   LIST_ELEMENT_INFO(kWebMIdTrackEntry, 2, kTrackEntryIds),
   LIST_ELEMENT_INFO(kWebMIdTrackTranslate, 3, kTrackTranslateIds),
   LIST_ELEMENT_INFO(kWebMIdVideo, 3, kVideoIds),
+  LIST_ELEMENT_INFO(kWebMIdColor, 4, kColorIds),
   LIST_ELEMENT_INFO(kWebMIdAudio, 3, kAudioIds),
   LIST_ELEMENT_INFO(kWebMIdTrackOperation, 3, kTrackOperationIds),
   LIST_ELEMENT_INFO(kWebMIdTrackCombinePlanes, 4, kTrackCombinePlanesIds),
@@ -892,7 +911,8 @@ bool WebMListParser::OnListStart(int id, int64_t size) {
   if (!element_info)
     return false;
 
-  int current_level = root_level_ + list_state_stack_.size() - 1;
+  int current_level =
+      root_level_ + static_cast<int>(list_state_stack_.size()) - 1;
   if (current_level + 1 != element_info->level_)
     return false;
 

@@ -20,10 +20,10 @@ namespace shaka {
 namespace media {
 
 MpdNotifyMuxerListener::MpdNotifyMuxerListener(MpdNotifier* mpd_notifier)
-    : mpd_notifier_(mpd_notifier), notification_id_(0), is_encrypted_(false) {
+    : mpd_notifier_(mpd_notifier), is_encrypted_(false) {
   DCHECK(mpd_notifier);
-  DCHECK(mpd_notifier->dash_profile() == kOnDemandProfile ||
-         mpd_notifier->dash_profile() == kLiveProfile);
+  DCHECK(mpd_notifier->dash_profile() == DashProfile::kOnDemand ||
+         mpd_notifier->dash_profile() == DashProfile::kLive);
 }
 
 MpdNotifyMuxerListener::~MpdNotifyMuxerListener() {}
@@ -38,18 +38,19 @@ void MpdNotifyMuxerListener::OnEncryptionInfoReady(
     LOG_IF(WARNING, is_encrypted_)
         << "Updating initial encryption information.";
     protection_scheme_ = protection_scheme;
-    default_key_id_.assign(key_id.begin(), key_id.end());
+    default_key_id_ = key_id;
     key_system_info_ = key_system_info;
     is_encrypted_ = true;
     return;
   }
+  if (!notification_id_)
+    return;
   DCHECK_EQ(protection_scheme, protection_scheme_);
 
   for (const ProtectionSystemSpecificInfo& info : key_system_info) {
-    std::string drm_uuid = internal::CreateUUIDString(info.system_id());
-    std::vector<uint8_t> new_pssh = info.CreateBox();
+    const std::string drm_uuid = internal::CreateUUIDString(info.system_id);
     bool updated = mpd_notifier_->NotifyEncryptionUpdate(
-        notification_id_, drm_uuid, key_id, new_pssh);
+        notification_id_.value(), drm_uuid, key_id, info.psshs);
     LOG_IF(WARNING, !updated) << "Failed to update encryption info.";
   }
 }
@@ -76,11 +77,21 @@ void MpdNotifyMuxerListener::OnMediaStart(
                                          key_system_info_, media_info.get());
   }
 
-  if (mpd_notifier_->dash_profile() == kLiveProfile) {
-    // TODO(kqyang): Check return result.
-    mpd_notifier_->NotifyNewContainer(*media_info, &notification_id_);
-  } else {
-    media_info_ = std::move(media_info);
+  // The content may be splitted into multiple files, but their MediaInfo
+  // should be compatible.
+  if (media_info_ &&
+      !internal::IsMediaInfoCompatible(*media_info, *media_info_)) {
+    LOG(WARNING) << "Incompatible MediaInfo \n"
+                 << media_info->ShortDebugString() << "\n vs \n"
+                 << media_info_->ShortDebugString()
+                 << "\nThe result manifest may not be playable.";
+  }
+  media_info_ = std::move(media_info);
+
+  if (mpd_notifier_->dash_profile() == DashProfile::kLive) {
+    if (!NotifyNewContainer())
+      return;
+    DCHECK(notification_id_);
   }
 }
 
@@ -88,8 +99,9 @@ void MpdNotifyMuxerListener::OnMediaStart(
 // the information is in the media info.
 void MpdNotifyMuxerListener::OnSampleDurationReady(
     uint32_t sample_duration) {
-  if (mpd_notifier_->dash_profile() == kLiveProfile) {
-    mpd_notifier_->NotifySampleDuration(notification_id_, sample_duration);
+  if (mpd_notifier_->dash_profile() == DashProfile::kLive) {
+    mpd_notifier_->NotifySampleDuration(notification_id_.value(),
+                                        sample_duration);
     return;
   }
 
@@ -109,58 +121,99 @@ void MpdNotifyMuxerListener::OnSampleDurationReady(
   media_info_->mutable_video_info()->set_frame_duration(sample_duration);
 }
 
-void MpdNotifyMuxerListener::OnMediaEnd(bool has_init_range,
-                                        uint64_t init_range_start,
-                                        uint64_t init_range_end,
-                                        bool has_index_range,
-                                        uint64_t index_range_start,
-                                        uint64_t index_range_end,
-                                        float duration_seconds,
-                                        uint64_t file_size) {
-  if (mpd_notifier_->dash_profile() == kLiveProfile) {
-    DCHECK(subsegments_.empty());
+void MpdNotifyMuxerListener::OnMediaEnd(const MediaRanges& media_ranges,
+                                        float duration_seconds) {
+  if (mpd_notifier_->dash_profile() == DashProfile::kLive) {
+    DCHECK(event_info_.empty());
+    // TODO(kqyang): Set mpd duration to |duration_seconds|, which is more
+    // accurate than the duration coded in the original media header.
+    if (mpd_notifier_->mpd_type() == MpdType::kStatic)
+      mpd_notifier_->Flush();
     return;
   }
 
   DCHECK(media_info_);
-  if (!internal::SetVodInformation(has_init_range,
-                                   init_range_start,
-                                   init_range_end,
-                                   has_index_range,
-                                   index_range_start,
-                                   index_range_end,
-                                   duration_seconds,
-                                   file_size,
+  if (!internal::SetVodInformation(media_ranges, duration_seconds,
                                    media_info_.get())) {
     LOG(ERROR) << "Failed to generate VOD information from input.";
     return;
   }
 
-  uint32_t id;
-  // TODO(kqyang): Check return result.
-  mpd_notifier_->NotifyNewContainer(*media_info_, &id);
-  for (std::list<SubsegmentInfo>::const_iterator it = subsegments_.begin();
-       it != subsegments_.end(); ++it) {
-    mpd_notifier_->NotifyNewSegment(id, it->start_time, it->duration,
-                                    it->segment_file_size);
+  if (notification_id_) {
+    mpd_notifier_->NotifyMediaInfoUpdate(notification_id_.value(),
+                                         *media_info_);
+  } else {
+    if (!NotifyNewContainer())
+      return;
+    DCHECK(notification_id_);
   }
-  subsegments_.clear();
+  // TODO(rkuroiwa): Use media_ranges.subsegment_ranges instead of caching the
+  // subsegments.
+  for (const auto& event_info : event_info_) {
+    switch (event_info.type) {
+      case EventInfoType::kSegment:
+        mpd_notifier_->NotifyNewSegment(
+            notification_id_.value(), event_info.segment_info.start_time,
+            event_info.segment_info.duration,
+            event_info.segment_info.segment_file_size);
+        break;
+      case EventInfoType::kKeyFrame:
+        // NO-OP for DASH.
+        break;
+      case EventInfoType::kCue:
+        mpd_notifier_->NotifyCueEvent(notification_id_.value(),
+                                      event_info.cue_event_info.timestamp);
+        break;
+    }
+  }
+  event_info_.clear();
   mpd_notifier_->Flush();
 }
 
 void MpdNotifyMuxerListener::OnNewSegment(const std::string& file_name,
-                                          uint64_t start_time,
-                                          uint64_t duration,
+                                          int64_t start_time,
+                                          int64_t duration,
                                           uint64_t segment_file_size) {
-  if (mpd_notifier_->dash_profile() == kLiveProfile) {
-    // TODO(kqyang): Check return result.
-    mpd_notifier_->NotifyNewSegment(
-        notification_id_, start_time, duration, segment_file_size);
-    mpd_notifier_->Flush();
+  if (mpd_notifier_->dash_profile() == DashProfile::kLive) {
+    mpd_notifier_->NotifyNewSegment(notification_id_.value(), start_time,
+                                    duration, segment_file_size);
+    if (mpd_notifier_->mpd_type() == MpdType::kDynamic)
+      mpd_notifier_->Flush();
   } else {
-    SubsegmentInfo subsegment = {start_time, duration, segment_file_size};
-    subsegments_.push_back(subsegment);
+    EventInfo event_info;
+    event_info.type = EventInfoType::kSegment;
+    event_info.segment_info = {start_time, duration, segment_file_size};
+    event_info_.push_back(event_info);
   }
+}
+
+void MpdNotifyMuxerListener::OnKeyFrame(int64_t timestamp,
+                                        uint64_t start_byte_offset,
+                                        uint64_t size) {
+  // NO-OP for DASH.
+}
+
+void MpdNotifyMuxerListener::OnCueEvent(int64_t timestamp,
+                                        const std::string& cue_data) {
+  // Not using |cue_data| at this moment.
+  if (mpd_notifier_->dash_profile() == DashProfile::kLive) {
+    mpd_notifier_->NotifyCueEvent(notification_id_.value(), timestamp);
+  } else {
+    EventInfo event_info;
+    event_info.type = EventInfoType::kCue;
+    event_info.cue_event_info = {timestamp};
+    event_info_.push_back(event_info);
+  }
+}
+
+bool MpdNotifyMuxerListener::NotifyNewContainer() {
+  uint32_t notification_id;
+  if (!mpd_notifier_->NotifyNewContainer(*media_info_, &notification_id)) {
+    LOG(ERROR) << "Failed to notify MpdNotifier.";
+    return false;
+  }
+  notification_id_ = notification_id;
+  return true;
 }
 
 }  // namespace media

@@ -4,18 +4,19 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_BASE_BUFFER_WRITER_H_
-#define MEDIA_BASE_BUFFER_WRITER_H_
+#ifndef PACKAGER_MEDIA_BASE_BUFFER_WRITER_H_
+#define PACKAGER_MEDIA_BASE_BUFFER_WRITER_H_
 
 #include <vector>
 
 #include "packager/base/macros.h"
-#include "packager/media/base/status.h"
+#include "packager/status.h"
 
 namespace shaka {
-namespace media {
 
 class File;
+
+namespace media {
 
 /// A simple buffer writer implementation which appends various data types to
 /// buffer.
@@ -47,6 +48,7 @@ class BufferWriter {
   void AppendNBytes(uint64_t v, size_t num_bytes);
 
   void AppendVector(const std::vector<uint8_t>& v);
+  void AppendString(const std::string& s);
   void AppendArray(const uint8_t* buf, size_t size);
   void AppendBuffer(const BufferWriter& buffer);
 
@@ -77,4 +79,4 @@ class BufferWriter {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_BASE_BUFFER_WRITER_H_
+#endif  // PACKAGER_MEDIA_BASE_BUFFER_WRITER_H_

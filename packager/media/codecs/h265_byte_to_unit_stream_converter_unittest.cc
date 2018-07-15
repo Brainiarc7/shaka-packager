@@ -14,25 +14,26 @@
 
 namespace {
 const char kExpectedConfigRecord[] =
-    "01016000000300900000030000f000fcfdf8f800000303a10001002e42010101600000"
-    "030090000003000003005da0028080241f265999a4932bffc0d5c0d640400000030040"
-    "00000602a2000100074401c172b46240a00001001840010c01ffff0160000003009000"
-    "0003000003005d999809";
+    "0101600000009000000000005df000fcfdf8f800000303a00001001840010c01ffff01"
+    "600000030090000003000003005d999809a10001002e42010101600000030090000003"
+    "000003005da0028080241f265999a4932bffc0d5c0d64040000003004000000602a200"
+    "0100074401c172b46240";
 }
 
 namespace shaka {
 namespace media {
 
-TEST(H265ByteToUnitStreamConverter, ConversionSuccess) {
+TEST(H265ByteToUnitStreamConverter, StripParameterSetsNalu) {
   std::vector<uint8_t> input_frame =
       ReadTestDataFile("hevc-byte-stream-frame.h265");
   ASSERT_FALSE(input_frame.empty());
 
   std::vector<uint8_t> expected_output_frame =
-      ReadTestDataFile("hevc-unit-stream-frame.h265");
+      ReadTestDataFile("hvc1-unit-stream-frame.h265");
   ASSERT_FALSE(expected_output_frame.empty());
 
-  H265ByteToUnitStreamConverter converter;
+  H265ByteToUnitStreamConverter converter(
+      H26xStreamFormat::kNalUnitStreamWithoutParameterSetNalus);
   std::vector<uint8_t> output_frame;
   ASSERT_TRUE(converter.ConvertByteStreamToNalUnitStream(input_frame.data(),
                                                          input_frame.size(),
@@ -49,17 +50,36 @@ TEST(H265ByteToUnitStreamConverter, ConversionSuccess) {
   // Double-check that it can be parsed.
   HEVCDecoderConfigurationRecord config;
   ASSERT_TRUE(config.Parse(decoder_config));
-  // The order is SPS, PPS, VPS.
+  // The order is VPS, SPS, PPS.
   ASSERT_EQ(3u, config.nalu_count());
-  EXPECT_EQ(Nalu::H265_SPS, config.nalu(0).type());
-  EXPECT_EQ(Nalu::H265_PPS, config.nalu(1).type());
-  EXPECT_EQ(Nalu::H265_VPS, config.nalu(2).type());
+  EXPECT_EQ(Nalu::H265_VPS, config.nalu(0).type());
+  EXPECT_EQ(Nalu::H265_SPS, config.nalu(1).type());
+  EXPECT_EQ(Nalu::H265_PPS, config.nalu(2).type());
+}
+
+TEST(H265ByteToUnitStreamConverter, KeepParameterSetsNalu) {
+  std::vector<uint8_t> input_frame =
+      ReadTestDataFile("hevc-byte-stream-frame.h265");
+  ASSERT_FALSE(input_frame.empty());
+
+  std::vector<uint8_t> expected_output_frame =
+      ReadTestDataFile("hev1-unit-stream-frame.h265");
+  ASSERT_FALSE(expected_output_frame.empty());
+
+  H265ByteToUnitStreamConverter converter(
+      H26xStreamFormat::kNalUnitStreamWithParameterSetNalus);
+  std::vector<uint8_t> output_frame;
+  ASSERT_TRUE(converter.ConvertByteStreamToNalUnitStream(input_frame.data(),
+                                                         input_frame.size(),
+                                                         &output_frame));
+  EXPECT_EQ(expected_output_frame, output_frame);
 }
 
 TEST(H265ByteToUnitStreamConverter, ConversionFailure) {
   std::vector<uint8_t> input_frame(100, 0);
 
-  H265ByteToUnitStreamConverter converter;
+  H265ByteToUnitStreamConverter converter(
+      H26xStreamFormat::kNalUnitStreamWithParameterSetNalus);
   std::vector<uint8_t> output_frame;
   EXPECT_FALSE(converter.ConvertByteStreamToNalUnitStream(input_frame.data(),
                                                           0,

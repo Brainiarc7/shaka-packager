@@ -8,12 +8,14 @@
 
 #include <google/protobuf/text_format.h>
 
+#include <cmath>
+
 #include "packager/base/logging.h"
+#include "packager/file/file.h"
 #include "packager/media/base/muxer_options.h"
-#include "packager/media/base/stream_info.h"
 #include "packager/media/base/protection_system_specific_info.h"
+#include "packager/media/base/stream_info.h"
 #include "packager/media/event/muxer_listener_internal.h"
-#include "packager/media/file/file.h"
 #include "packager/mpd/base/media_info.pb.h"
 
 namespace shaka {
@@ -21,7 +23,7 @@ namespace media {
 
 VodMediaInfoDumpMuxerListener::VodMediaInfoDumpMuxerListener(
     const std::string& output_file_path)
-    : output_file_name_(output_file_path), is_encrypted_(false) {}
+    : output_file_name_(output_file_path) {}
 
 VodMediaInfoDumpMuxerListener::~VodMediaInfoDumpMuxerListener() {}
 
@@ -35,7 +37,7 @@ void VodMediaInfoDumpMuxerListener::OnEncryptionInfoReady(
       << "Updating (non initial) encryption info is not supported by "
          "this module.";
   protection_scheme_ = protection_scheme;
-  default_key_id_.assign(default_key_id.begin(), default_key_id.end());
+  default_key_id_ = default_key_id;
   key_system_info_ = key_system_info;
   is_encrypted_ = true;
 }
@@ -45,7 +47,7 @@ void VodMediaInfoDumpMuxerListener::OnMediaStart(
     const StreamInfo& stream_info,
     uint32_t time_scale,
     ContainerType container_type) {
-  DCHECK(muxer_options.single_segment);
+  DCHECK(muxer_options.segment_template.empty());
   media_info_.reset(new MediaInfo());
   if (!internal::GenerateMediaInfo(muxer_options,
                                    stream_info,
@@ -72,34 +74,40 @@ void VodMediaInfoDumpMuxerListener::OnSampleDurationReady(
   }
 }
 
-void VodMediaInfoDumpMuxerListener::OnMediaEnd(bool has_init_range,
-                                               uint64_t init_range_start,
-                                               uint64_t init_range_end,
-                                               bool has_index_range,
-                                               uint64_t index_range_start,
-                                               uint64_t index_range_end,
-                                               float duration_seconds,
-                                               uint64_t file_size) {
+void VodMediaInfoDumpMuxerListener::OnMediaEnd(const MediaRanges& media_ranges,
+                                               float duration_seconds) {
   DCHECK(media_info_);
-  if (!internal::SetVodInformation(has_init_range,
-                                   init_range_start,
-                                   init_range_end,
-                                   has_index_range,
-                                   index_range_start,
-                                   index_range_end,
-                                   duration_seconds,
-                                   file_size,
+  if (!internal::SetVodInformation(media_ranges, duration_seconds,
                                    media_info_.get())) {
     LOG(ERROR) << "Failed to generate VOD information from input.";
     return;
   }
+  if (!media_info_->has_bandwidth())
+    media_info_->set_bandwidth(max_bitrate_);
   WriteMediaInfoToFile(*media_info_, output_file_name_);
 }
 
 void VodMediaInfoDumpMuxerListener::OnNewSegment(const std::string& file_name,
-                                                 uint64_t start_time,
-                                                 uint64_t duration,
-                                                 uint64_t segment_file_size) {}
+                                                 int64_t start_time,
+                                                 int64_t duration,
+                                                 uint64_t segment_file_size) {
+  const double segment_duration_seconds =
+      static_cast<double>(duration) / media_info_->reference_time_scale();
+
+  const int kBitsInByte = 8;
+  const uint64_t bitrate =
+      ceil(kBitsInByte * segment_file_size / segment_duration_seconds);
+  max_bitrate_ = std::max(max_bitrate_, bitrate);
+}
+
+void VodMediaInfoDumpMuxerListener::OnKeyFrame(int64_t timestamp,
+                                               uint64_t start_byte_offset,
+                                               uint64_t size) {}
+
+void VodMediaInfoDumpMuxerListener::OnCueEvent(int64_t timestamp,
+                                               const std::string& cue_data) {
+  NOTIMPLEMENTED();
+}
 
 // static
 bool VodMediaInfoDumpMuxerListener::WriteMediaInfoToFile(
@@ -112,7 +120,7 @@ bool VodMediaInfoDumpMuxerListener::WriteMediaInfoToFile(
     return false;
   }
 
-  media::File* file = File::Open(output_file_path.c_str(), "w");
+  File* file = File::Open(output_file_path.c_str(), "w");
   if (!file) {
     LOG(ERROR) << "Failed to open " << output_file_path;
     return false;

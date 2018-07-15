@@ -10,9 +10,6 @@
 #include <list>
 #include <memory>
 
-#include "packager/base/stl_util.h"
-#include "packager/media/base/aes_cryptor.h"
-#include "packager/media/base/key_source.h"
 #include "packager/media/base/media_sample.h"
 #include "packager/media/base/stream_info.h"
 
@@ -45,13 +42,7 @@ class PesPacketGenerator {
   /// NumberOfReadyPesPackets().
   /// If this returns false, the object may end up in an undefined state.
   /// @return true on success, false otherwise.
-  virtual bool PushSample(scoped_refptr<MediaSample> sample);
-
-  /// Sets the encryption key for encrypting samples.
-  /// @param encryption_key is the key that will be used to encrypt further
-  ///        samples.
-  /// @return true on success, false otherwise.
-  virtual bool SetEncryptionKey(std::unique_ptr<EncryptionKey> encryption_key);
+  virtual bool PushSample(const MediaSample& sample);
 
   /// @return The number of PES packets that are ready to be consumed.
   virtual size_t NumberOfReadyPesPackets();
@@ -82,11 +73,9 @@ class PesPacketGenerator {
   // This can be used to create a PES from multiple audio samples.
   std::unique_ptr<PesPacket> current_processing_pes_;
 
-  std::list<PesPacket*> pes_packets_;
-  STLElementDeleter<decltype(pes_packets_)> pes_packets_deleter_;
-
-  // Current encryption key.
-  std::unique_ptr<AesCryptor> encryptor_;
+  // Audio stream id PES packet is codec dependent.
+  uint8_t audio_stream_id_ = 0;
+  std::list<std::unique_ptr<PesPacket>> pes_packets_;
 
   DISALLOW_COPY_AND_ASSIGN(PesPacketGenerator);
 };

@@ -19,17 +19,58 @@ namespace {
 inline bool IsStartCode(const uint8_t* data) {
   return data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x01;
 }
+
+// Edits |subsamples| given the number of consumed bytes.
+void UpdateSubsamples(uint64_t consumed_bytes,
+                      std::vector<SubsampleEntry>* subsamples) {
+  if (consumed_bytes == 0 || subsamples->empty()) {
+    return;
+  }
+  size_t num_entries_to_delete = 0;
+  for (SubsampleEntry& subsample : *subsamples) {
+    if (subsample.clear_bytes > consumed_bytes) {
+      subsample.clear_bytes -= consumed_bytes;
+      consumed_bytes = 0;
+      break;
+    }
+    consumed_bytes -= subsample.clear_bytes;
+    subsample.clear_bytes = 0;
+
+    if (subsample.cipher_bytes > consumed_bytes) {
+      subsample.cipher_bytes -= consumed_bytes;
+      consumed_bytes = 0;
+      break;
+    }
+    consumed_bytes -= subsample.cipher_bytes;
+    subsample.cipher_bytes = 0;
+    ++num_entries_to_delete;
+  }
+
+  subsamples->erase(subsamples->begin(),
+                    subsamples->begin() + num_entries_to_delete);
+}
+
+bool IsNaluLengthEncrypted(
+    uint8_t nalu_length_size,
+    const std::vector<SubsampleEntry>& subsamples) {
+  if (subsamples.empty())
+    return false;
+
+  for (const SubsampleEntry& subsample : subsamples) {
+    if (subsample.clear_bytes >= nalu_length_size) {
+      return false;
+    }
+    nalu_length_size -= subsample.clear_bytes;
+    if (subsample.cipher_bytes > 0) {
+      return true;
+    }
+  }
+  // Ran out of subsamples. Assume the rest is in the clear.
+  return false;
+}
 }  // namespace
 
-Nalu::Nalu()
-    : data_(nullptr),
-      header_size_(0),
-      payload_size_(0),
-      ref_idc_(0),
-      nuh_layer_id_(0),
-      nuh_temporal_id_(0),
-      type_(0),
-      is_video_slice_(false) {}
+Nalu::Nalu() = default;
 
 bool Nalu::Initialize(CodecType type,
                       const uint8_t* data,
@@ -68,8 +109,8 @@ bool Nalu::InitializeFromH264(const uint8_t* data, uint64_t size) {
                  << ").";
     return false;
   } else if (type_ == Nalu::H264_IDRSlice || type_ == Nalu::H264_SPS ||
-      type_ == Nalu::H264_SPSExtension || type_ == Nalu::H264_SubsetSPS ||
-      type_ == Nalu::H264_PPS) {
+             type_ == Nalu::H264_SPSExtension ||
+             type_ == Nalu::H264_SubsetSPS || type_ == Nalu::H264_PPS) {
     if (ref_idc_ == 0) {
       LOG(WARNING) << "nal_ref_idc shall not be equal to 0 for nalu type "
                    << type_ << " (header 0x" << std::hex
@@ -86,10 +127,12 @@ bool Nalu::InitializeFromH264(const uint8_t* data, uint64_t size) {
     }
   }
 
-  is_video_slice_ = (type_ >= Nalu::H264_NonIDRSlice &&
-                     type_ <= Nalu::H264_IDRSlice);
+  is_aud_ = type_ == H264_AUD;
+  is_vcl_ = (type_ >= Nalu::H264_NonIDRSlice && type_ <= Nalu::H264_IDRSlice);
+  is_video_slice_ =
+      (type_ == Nalu::H264_NonIDRSlice || type_ == Nalu::H264_IDRSlice);
   can_start_access_unit_ =
-      (is_video_slice_ || type_ == Nalu::H264_AUD || type_ == Nalu::H264_SPS ||
+      (is_vcl_ || type_ == Nalu::H264_AUD || type_ == Nalu::H264_SPS ||
        type_ == Nalu::H264_PPS || type_ == Nalu::H264_SEIMessage ||
        (type_ >= Nalu::H264_PrefixNALUnit && type_ <= Nalu::H264_Reserved18));
   return true;
@@ -153,10 +196,12 @@ bool Nalu::InitializeFromH265(const uint8_t* data, uint64_t size) {
     }
   }
 
-  is_video_slice_ = type_ >= Nalu::H265_TRAIL_N && type_ <= Nalu::H265_CRA_NUT;
+  is_aud_ = type_ == H265_AUD;
+  is_vcl_ = type_ >= Nalu::H265_TRAIL_N && type_ <= Nalu::H265_CRA_NUT;
+  is_video_slice_ = is_vcl_;
   can_start_access_unit_ =
       nuh_layer_id_ == 0 &&
-      (is_video_slice_ || type_ == Nalu::H265_AUD || type_ == Nalu::H265_VPS ||
+      (is_vcl_ || type_ == Nalu::H265_AUD || type_ == Nalu::H265_VPS ||
        type_ == Nalu::H265_SPS || type_ == Nalu::H265_PPS ||
        type_ == Nalu::H265_PREFIX_SEI ||
        (type_ >= Nalu::H265_RSV_NVCL41 && type_ <= Nalu::H265_RSV_NVCL44) ||
@@ -168,14 +213,27 @@ NaluReader::NaluReader(Nalu::CodecType type,
                        uint8_t nal_length_size,
                        const uint8_t* stream,
                        uint64_t stream_size)
+    : NaluReader(type,
+                 nal_length_size,
+                 stream,
+                 stream_size,
+                 std::vector<SubsampleEntry>()) {}
+
+NaluReader::NaluReader(Nalu::CodecType type,
+                       uint8_t nal_length_size,
+                       const uint8_t* stream,
+                       uint64_t stream_size,
+                       const std::vector<SubsampleEntry>& subsamples)
     : stream_(stream),
       stream_size_(stream_size),
       nalu_type_(type),
       nalu_length_size_(nal_length_size),
       format_(nal_length_size == 0 ? kAnnexbByteStreamFormat
-                                   : kNalUnitStreamFormat) {
+                                   : kNalUnitStreamFormat),
+      subsamples_(subsamples) {
   DCHECK(stream);
 }
+
 NaluReader::~NaluReader() {}
 
 NaluReader::Result NaluReader::Advance(Nalu* nalu) {
@@ -199,6 +257,10 @@ NaluReader::Result NaluReader::Advance(Nalu* nalu) {
     nalu_length = nalu_length_with_header - nalu_length_size_or_start_code_size;
   } else {
     BufferReader reader(stream_, stream_size_);
+    if (IsNaluLengthEncrypted(nalu_length_size_, subsamples_)) {
+      LOG(ERROR) << "NALU length is encrypted.";
+      return NaluReader::kInvalidStream;
+    }
     if (!reader.ReadNBytesInto8(&nalu_length, nalu_length_size_))
       return NaluReader::kInvalidStream;
     nalu_length_size_or_start_code_size = nalu_length_size_;
@@ -222,6 +284,8 @@ NaluReader::Result NaluReader::Advance(Nalu* nalu) {
   // is called, we will effectively be skipping it.
   stream_ += nalu_length_size_or_start_code_size + nalu_length;
   stream_size_ -= nalu_length_size_or_start_code_size + nalu_length;
+  UpdateSubsamples(nalu_length_size_or_start_code_size + nalu_length,
+                   &subsamples_);
 
   DVLOG(4) << "NALU type: " << static_cast<int>(nalu->type())
            << " at: " << reinterpret_cast<const void*>(nalu->data())
@@ -276,13 +340,72 @@ bool NaluReader::FindStartCode(const uint8_t* data,
   return false;
 }
 
+// static
+bool NaluReader::FindStartCodeInClearRange(
+    const uint8_t* data,
+    uint64_t data_size,
+    uint64_t* offset,
+    uint8_t* start_code_size,
+    const std::vector<SubsampleEntry>& subsamples) {
+  if (subsamples.empty()) {
+    return FindStartCode(data, data_size, offset, start_code_size);
+  }
+
+  uint64_t current_offset = 0;
+  for (const SubsampleEntry& subsample : subsamples) {
+    uint16_t clear_bytes = subsample.clear_bytes;
+    if (current_offset + clear_bytes > data_size) {
+      LOG(WARNING) << "The sum of subsample sizes is greater than data_size.";
+      clear_bytes = data_size - current_offset;
+    }
+
+    // Note that calling FindStartCode() here should get the correct
+    // start_code_size, even tho data + current_offset may be in the middle of
+    // the buffer because data + current_offset - 1 is either it shouldn't be
+    // accessed because it's data - 1 or it is encrypted.
+    const bool found_start_code = FindStartCode(
+        data + current_offset, clear_bytes, offset, start_code_size);
+    if (found_start_code) {
+      *offset += current_offset;
+      return true;
+    }
+    const uint64_t subsample_size =
+        subsample.clear_bytes + subsample.cipher_bytes;
+    current_offset += subsample_size;
+    if (current_offset > data_size) {
+      // Assign data_size here so that the returned offset points to the end of
+      // the data.
+      current_offset = data_size;
+      LOG(WARNING) << "The sum of subsamples is greater than data_size.";
+      break;
+    }
+  }
+
+  // If there is more that's not specified by the subsample entries, assume it
+  // is in the clear.
+  if (current_offset < data_size) {
+    const bool found_start_code =
+        FindStartCode(data + current_offset, data_size - current_offset, offset,
+                      start_code_size);
+    *offset += current_offset;
+    return found_start_code;
+  }
+
+  // End of data: offset is pointing to the first byte that was not considered
+  // as a possible start of a start code.
+  *offset = current_offset;
+  *start_code_size = 0;
+  return false;
+}
+
 bool NaluReader::LocateNaluByStartCode(uint64_t* nalu_size,
                                        uint8_t* start_code_size) {
   // Find the start code of next NALU.
   uint64_t nalu_start_off = 0;
   uint8_t annexb_start_code_size = 0;
-  if (!FindStartCode(stream_, stream_size_,
-                     &nalu_start_off, &annexb_start_code_size)) {
+  if (!FindStartCodeInClearRange(
+          stream_, stream_size_,
+          &nalu_start_off, &annexb_start_code_size, subsamples_)) {
     DVLOG(4) << "Could not find start code, end of stream?";
     return false;
   }
@@ -290,8 +413,18 @@ bool NaluReader::LocateNaluByStartCode(uint64_t* nalu_size,
   // Move the stream to the beginning of the NALU (pointing at the start code).
   stream_ += nalu_start_off;
   stream_size_ -= nalu_start_off;
+  // Shift the subsamples so that next call to FindStartCode() takes the updated
+  // subsample info.
+  UpdateSubsamples(nalu_start_off, &subsamples_);
 
   const uint8_t* nalu_data = stream_ + annexb_start_code_size;
+  // This is a temporary subsample entries for finding next nalu. subsamples_
+  // should not be updated below.
+  std::vector<SubsampleEntry> subsamples_for_finding_next_nalu;
+  if (!subsamples_.empty()) {
+    subsamples_for_finding_next_nalu = subsamples_;
+    UpdateSubsamples(annexb_start_code_size, &subsamples_for_finding_next_nalu);
+  }
   uint64_t max_nalu_data_size = stream_size_ - annexb_start_code_size;
   if (max_nalu_data_size <= 0) {
     DVLOG(3) << "End of stream";
@@ -307,14 +440,18 @@ bool NaluReader::LocateNaluByStartCode(uint64_t* nalu_size,
   uint64_t nalu_size_without_start_code = 0;
   uint8_t next_start_code_size = 0;
   while (true) {
-    if (!FindStartCode(nalu_data, max_nalu_data_size,
-                       &nalu_size_without_start_code, &next_start_code_size)) {
+    if (!FindStartCodeInClearRange(
+            nalu_data, max_nalu_data_size,
+            &nalu_size_without_start_code, &next_start_code_size,
+            subsamples_for_finding_next_nalu)) {
       nalu_data += max_nalu_data_size;
       break;
     }
 
     nalu_data += nalu_size_without_start_code + next_start_code_size;
     max_nalu_data_size -= nalu_size_without_start_code + next_start_code_size;
+    UpdateSubsamples(nalu_size_without_start_code + next_start_code_size,
+                     &subsamples_for_finding_next_nalu);
     // If it is not a valid NAL unit, we will continue searching. This is to
     // handle the case where emulation prevention are not applied.
     Nalu nalu;

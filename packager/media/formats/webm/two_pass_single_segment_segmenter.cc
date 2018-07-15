@@ -6,18 +6,10 @@
 
 #include "packager/media/formats/webm/two_pass_single_segment_segmenter.h"
 
-#include <inttypes.h>
-#include <openssl/err.h>
-#include <openssl/rand.h>
-
 #include <algorithm>
 
-#include "packager/base/files/file_path.h"
-#include "packager/base/strings/stringprintf.h"
-#include "packager/base/threading/platform_thread.h"
-#include "packager/base/time/time.h"
+#include "packager/file/file_util.h"
 #include "packager/media/base/media_sample.h"
-#include "packager/media/base/media_stream.h"
 #include "packager/media/base/muxer_options.h"
 #include "packager/media/base/stream_info.h"
 #include "packager/third_party/libwebm/src/mkvmuxer.hpp"
@@ -28,20 +20,24 @@ namespace shaka {
 namespace media {
 namespace webm {
 namespace {
-/// Create the temp file name using process/thread id and current time.
-std::string TempFileName(const MuxerOptions& options) {
-  // TODO: Move to a common util function and remove other uses.
-  int32_t tid = static_cast<int32_t>(base::PlatformThread::CurrentId());
-  int64_t rand = 0;
-  if (RAND_bytes(reinterpret_cast<uint8_t*>(&rand), sizeof(rand)) != 1) {
-    LOG(WARNING) << "RAND_bytes failed with error: "
-                 << ERR_error_string(ERR_get_error(), NULL);
-    rand = base::Time::Now().ToInternalValue();
+// Cues will be inserted before clusters. All clusters will be shifted down by
+// the size of cues. However, cluster positions affect the size of cues. This
+// function adjusts cues size iteratively until it is stable.
+// Returns the size of updated Cues.
+uint64_t UpdateCues(mkvmuxer::Cues* cues) {
+  uint64_t cues_size = cues->Size();
+  uint64_t adjustment = cues_size;
+  while (adjustment != 0) {
+    for (int i = 0; i < cues->cue_entries_size(); ++i) {
+      mkvmuxer::CuePoint* cue = cues->GetCueByIndex(i);
+      cue->set_cluster_pos(cue->cluster_pos() + adjustment);
+    }
+    uint64_t new_cues_size = cues->Size();
+    DCHECK_LE(cues_size, new_cues_size);
+    adjustment = new_cues_size - cues_size;
+    cues_size = new_cues_size;
   }
-  std::string file_prefix =
-      base::StringPrintf("packager-tempfile-%x-%" PRIx64 ".tmp", tid, rand);
-  return base::FilePath::FromUTF8Unsafe(options.temp_dir).Append(
-      base::FilePath::FromUTF8Unsafe(file_prefix)).AsUTF8Unsafe();
+  return cues_size;
 }
 
 // Skips a given number of bytes in a file by reading.  This allows
@@ -72,38 +68,48 @@ TwoPassSingleSegmentSegmenter::TwoPassSingleSegmentSegmenter(
 
 TwoPassSingleSegmentSegmenter::~TwoPassSingleSegmentSegmenter() {}
 
-Status TwoPassSingleSegmentSegmenter::DoInitialize(
-    std::unique_ptr<MkvWriter> writer) {
+Status TwoPassSingleSegmentSegmenter::DoInitialize() {
   // Assume the amount of time to copy the temp file as the same amount
   // of time as to make it.
-  set_progress_target(info()->duration() * 2);
+  set_progress_target(duration() * 2);
 
-  real_writer_ = std::move(writer);
-
-  temp_file_name_ = TempFileName(options());
+  if (!TempFilePath(options().temp_dir, &temp_file_name_))
+    return Status(error::FILE_FAILURE, "Unable to create temporary file.");
   std::unique_ptr<MkvWriter> temp(new MkvWriter);
   Status status = temp->Open(temp_file_name_);
   if (!status.ok())
     return status;
+  set_writer(std::move(temp));
 
-  return SingleSegmentSegmenter::DoInitialize(std::move(temp));
+  return SingleSegmentSegmenter::DoInitialize();
 }
 
 Status TwoPassSingleSegmentSegmenter::DoFinalize() {
-  if (!cluster()->Finalize())
-    return Status(error::FILE_FAILURE, "Error finalizing cluster.");
-
-  // Write the Cues to the end of the temp file.
-  uint64_t cues_pos = writer()->Position();
-  set_index_start(cues_pos);
-  seek_head()->set_cues_pos(cues_pos - segment_payload_pos());
-  if (!cues()->Write(writer()))
-    return Status(error::FILE_FAILURE, "Error writing Cues data.");
+  const uint64_t header_size = init_end() + 1;
+  const uint64_t cues_pos = header_size - segment_payload_pos();
+  const uint64_t cues_size = UpdateCues(cues());
+  seek_head()->set_cues_pos(cues_pos);
+  seek_head()->set_cluster_pos(cues_pos + cues_size);
 
   // Write the header to the real output file.
-  Status temp = WriteSegmentHeader(writer()->Position(), real_writer_.get());
+  std::unique_ptr<MkvWriter> real_writer(new MkvWriter);
+  Status status = real_writer->Open(options().output_file_name);
+  if (!status.ok())
+    return status;
+
+  const uint64_t file_size = writer()->Position() + cues_size;
+  Status temp = WriteSegmentHeader(file_size, real_writer.get());
   if (!temp.ok())
     return temp;
+  DCHECK_EQ(real_writer->Position(), static_cast<int64_t>(header_size));
+
+  // Write the cues to the real output file.
+  set_index_start(real_writer->Position());
+  if (!cues()->Write(real_writer.get()))
+    return Status(error::FILE_FAILURE, "Error writing Cues data.");
+  set_index_end(real_writer->Position() - 1);
+  DCHECK_EQ(real_writer->Position(),
+            static_cast<int64_t>(segment_payload_pos() + cues_pos + cues_size));
 
   // Close the temp file and open it for reading.
   set_writer(std::unique_ptr<MkvWriter>());
@@ -113,14 +119,14 @@ Status TwoPassSingleSegmentSegmenter::DoFinalize() {
     return Status(error::FILE_FAILURE, "Error opening temp file.");
 
   // Skip the header that has already been written.
-  uint64_t header_size = real_writer_->Position();
   if (!ReadSkip(temp_reader.get(), header_size))
     return Status(error::FILE_FAILURE, "Error reading temp file.");
 
   // Copy the rest of the data over.
-  if (!CopyFileWithClusterRewrite(temp_reader.get(), real_writer_.get(),
-                                  cluster()->Size()))
+  if (!CopyFileWithClusterRewrite(temp_reader.get(), real_writer.get(),
+                                  cluster()->Size())) {
     return Status(error::FILE_FAILURE, "Error copying temp file.");
+  }
 
   // Close and delete the temp file.
   temp_reader.reset();
@@ -128,9 +134,7 @@ Status TwoPassSingleSegmentSegmenter::DoFinalize() {
     LOG(WARNING) << "Unable to delete temporary file " << temp_file_name_;
   }
 
-  // The WebM index is at the end of the file.
-  set_index_end(real_writer_->file()->Size() - 1);
-  return real_writer_->Close();
+  return real_writer->Close();
 }
 
 bool TwoPassSingleSegmentSegmenter::CopyFileWithClusterRewrite(
@@ -175,9 +179,9 @@ bool TwoPassSingleSegmentSegmenter::CopyFileWithClusterRewrite(
   if (!ReadSkip(source, cluster_size_size))
     return false;
 
-  // Copy the remaining data (i.e. Cues data).
+  // Copy the last cluster.
   return dest->WriteFromFile(source) ==
-         static_cast<int64_t>(last_cluster_payload_size + cues()->Size());
+         static_cast<int64_t>(last_cluster_payload_size);
 }
 
 }  // namespace webm

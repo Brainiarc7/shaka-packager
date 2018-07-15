@@ -4,13 +4,14 @@
 //
 // This file contains an implementation of an H264 Annex-B video stream parser.
 
-#ifndef MEDIA_CODECS_H264_PARSER_H_
-#define MEDIA_CODECS_H264_PARSER_H_
+#ifndef PACKAGER_MEDIA_CODECS_H264_PARSER_H_
+#define PACKAGER_MEDIA_CODECS_H264_PARSER_H_
 
 #include <stdint.h>
 #include <stdlib.h>
 
 #include <map>
+#include <memory>
 
 #include "packager/media/codecs/h26x_bit_reader.h"
 #include "packager/media/codecs/nalu_reader.h"
@@ -124,8 +125,8 @@ struct H264ModificationOfPicNum {
 };
 
 struct H264WeightingFactors {
-  bool luma_weight_flag;
-  bool chroma_weight_flag;
+  bool luma_weight_flag[32];
+  bool chroma_weight_flag[32];
   int luma_weight[32];
   int luma_offset[32];
   int chroma_weight[32][2];
@@ -164,9 +165,17 @@ struct H264SliceHeader {
 
   bool idr_pic_flag;       // from NAL header
   int nal_ref_idc;         // from NAL header
-  const uint8_t* nalu_data;  // from NAL header
-  off_t nalu_size;         // from NAL header
-  off_t header_bit_size;   // calculated
+  // Points to the beginning of the nal unit.
+  const uint8_t* nalu_data;
+
+  // Size of whole nalu unit.
+  size_t nalu_size;
+
+  // This is the size of the slice header not including the nalu header byte.
+  // Sturcture: |NALU Header|     Slice Header    |    Slice Data    |
+  // Size:      |<- 8bits ->|<- header_bit_size ->|<- Rest of nalu ->|
+  // Note that this is not a field in the H.264 spec.
+  size_t header_bit_size;
 
   int first_mb_in_slice;
   int slice_type;
@@ -193,12 +202,7 @@ struct H264SliceHeader {
   int luma_log2_weight_denom;
   int chroma_log2_weight_denom;
 
-  bool luma_weight_l0_flag;
-  bool chroma_weight_l0_flag;
   H264WeightingFactors pred_weight_table_l0;
-
-  bool luma_weight_l1_flag;
-  bool chroma_weight_l1_flag;
   H264WeightingFactors pred_weight_table_l1;
 
   bool no_output_of_prior_pics_flag;
@@ -324,8 +328,8 @@ class H264Parser {
   Result ParseDecRefPicMarking(H26xBitReader* br, H264SliceHeader* shdr);
 
   // PPSes and SPSes stored for future reference.
-  typedef std::map<int, H264Sps*> SpsById;
-  typedef std::map<int, H264Pps*> PpsById;
+  typedef std::map<int, std::unique_ptr<H264Sps>> SpsById;
+  typedef std::map<int, std::unique_ptr<H264Pps>> PpsById;
   SpsById active_SPSes_;
   PpsById active_PPSes_;
 
@@ -335,4 +339,4 @@ class H264Parser {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_CODECS_H264_PARSER_H_
+#endif  // PACKAGER_MEDIA_CODECS_H264_PARSER_H_

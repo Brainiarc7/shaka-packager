@@ -28,7 +28,6 @@ BoxReader::~BoxReader() {
     for (ChildMap::iterator itr = children_.begin(); itr != children_.end();
          ++itr) {
       DVLOG(1) << "Skipping unknown box: " << FourCCToString(itr->first);
-      delete itr->second;
     }
   }
 }
@@ -78,7 +77,10 @@ bool BoxReader::ScanChildren() {
 
     FourCC box_type = child->type();
     size_t box_size = child->size();
-    children_.insert(std::pair<FourCC, BoxReader*>(box_type, child.release()));
+    children_.insert(std::pair<FourCC, std::unique_ptr<BoxReader>>(
+        box_type, std::move(child)));
+    VLOG(2) << "Child " << FourCCToString(box_type) << " size 0x" << std::hex
+            << box_size << std::dec;
     RCHECK(SkipBytes(box_size));
   }
 
@@ -92,8 +94,7 @@ bool BoxReader::ReadChild(Box* child) {
   ChildMap::iterator itr = children_.find(child_type);
   RCHECK(itr != children_.end());
   DVLOG(2) << "Found a " << FourCCToString(child_type) << " box.";
-  RCHECK(child->Parse(itr->second));
-  delete itr->second;
+  RCHECK(child->Parse(itr->second.get()));
   children_.erase(itr);
   return true;
 }

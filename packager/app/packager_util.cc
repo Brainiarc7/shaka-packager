@@ -6,234 +6,196 @@
 
 #include "packager/app/packager_util.h"
 
-#include <gflags/gflags.h>
-#include <iostream>
-
-#include "packager/app/fixed_key_encryption_flags.h"
-#include "packager/app/mpd_flags.h"
-#include "packager/app/muxer_flags.h"
-#include "packager/app/widevine_encryption_flags.h"
 #include "packager/base/logging.h"
 #include "packager/base/strings/string_number_conversions.h"
-#include "packager/media/base/fixed_key_source.h"
-#include "packager/media/base/media_stream.h"
-#include "packager/media/base/muxer.h"
+#include "packager/base/strings/string_split.h"
+#include "packager/file/file.h"
+#include "packager/media/base/media_handler.h"
 #include "packager/media/base/muxer_options.h"
+#include "packager/media/base/playready_key_source.h"
+#include "packager/media/base/raw_key_source.h"
 #include "packager/media/base/request_signer.h"
-#include "packager/media/base/stream_info.h"
 #include "packager/media/base/widevine_key_source.h"
-#include "packager/media/file/file.h"
-#include "packager/mpd/base/mpd_builder.h"
-
-DEFINE_bool(mp4_use_decoding_timestamp_in_timeline,
-            false,
-            "If set, decoding timestamp instead of presentation timestamp will "
-            "be used when generating media timeline, e.g. timestamps in sidx "
-            "and mpd. This is to workaround a Chromium bug that decoding "
-            "timestamp is used in buffered range, https://crbug.com/398130.");
-DEFINE_bool(dump_stream_info, false, "Dump demuxed stream info.");
+#include "packager/media/chunking/chunking_handler.h"
+#include "packager/media/crypto/encryption_handler.h"
+#include "packager/mpd/base/mpd_options.h"
+#include "packager/status.h"
 
 namespace shaka {
 namespace media {
+namespace {
 
-void DumpStreamInfo(const std::vector<MediaStream*>& streams) {
-  printf("Found %zu stream(s).\n", streams.size());
-  for (size_t i = 0; i < streams.size(); ++i)
-    printf("Stream [%zu] %s\n", i, streams[i]->info()->ToString().c_str());
-}
-
-std::unique_ptr<RequestSigner> CreateSigner() {
-  std::unique_ptr<RequestSigner> signer;
-
-  if (!FLAGS_aes_signing_key.empty()) {
-    signer.reset(AesRequestSigner::CreateSigner(
-        FLAGS_signer, FLAGS_aes_signing_key, FLAGS_aes_signing_iv));
-    if (!signer) {
-      LOG(ERROR) << "Cannot create an AES signer object from '"
-                 << FLAGS_aes_signing_key << "':'" << FLAGS_aes_signing_iv
-                 << "'.";
-      return std::unique_ptr<RequestSigner>();
-    }
-  } else if (!FLAGS_rsa_signing_key_path.empty()) {
-    std::string rsa_private_key;
-    if (!File::ReadFileToString(FLAGS_rsa_signing_key_path.c_str(),
-                                &rsa_private_key)) {
-      LOG(ERROR) << "Failed to read from '" << FLAGS_rsa_signing_key_path
-                 << "'.";
-      return std::unique_ptr<RequestSigner>();
-    }
-    signer.reset(RsaRequestSigner::CreateSigner(FLAGS_signer, rsa_private_key));
-    if (!signer) {
-      LOG(ERROR) << "Cannot create a RSA signer object from '"
-                 << FLAGS_rsa_signing_key_path << "'.";
-      return std::unique_ptr<RequestSigner>();
-    }
+std::unique_ptr<RequestSigner> CreateSigner(const WidevineSigner& signer) {
+  std::unique_ptr<RequestSigner> request_signer;
+  switch (signer.signing_key_type) {
+    case WidevineSigner::SigningKeyType::kAes:
+      request_signer.reset(AesRequestSigner::CreateSigner(
+          signer.signer_name, signer.aes.key, signer.aes.iv));
+      break;
+    case WidevineSigner::SigningKeyType::kRsa:
+      request_signer.reset(
+          RsaRequestSigner::CreateSigner(signer.signer_name, signer.rsa.key));
+      break;
+    case WidevineSigner::SigningKeyType::kNone:
+      break;
   }
-  return signer;
+  if (!request_signer)
+    LOG(ERROR) << "Failed to create the signer object.";
+  return request_signer;
 }
 
-std::unique_ptr<KeySource> CreateEncryptionKeySource() {
-  std::unique_ptr<KeySource> encryption_key_source;
-  if (FLAGS_enable_widevine_encryption) {
-    std::unique_ptr<WidevineKeySource> widevine_key_source(
-        new WidevineKeySource(FLAGS_key_server_url, FLAGS_include_common_pssh));
-    if (!FLAGS_signer.empty()) {
-      std::unique_ptr<RequestSigner> request_signer(CreateSigner());
-      if (!request_signer)
-        return std::unique_ptr<KeySource>();
-      widevine_key_source->set_signer(std::move(request_signer));
-    }
+}  // namespace
 
-    std::vector<uint8_t> content_id;
-    if (!base::HexStringToBytes(FLAGS_content_id, &content_id)) {
-      LOG(ERROR) << "Invalid content_id hex string specified.";
-      return std::unique_ptr<KeySource>();
+std::unique_ptr<KeySource> CreateEncryptionKeySource(
+    FourCC protection_scheme,
+    const EncryptionParams& encryption_params) {
+  int protection_systems_flags(0);
+  if (encryption_params.generate_common_pssh)
+    protection_systems_flags |= COMMON_PROTECTION_SYSTEM_FLAG;
+  if (encryption_params.generate_playready_pssh)
+    protection_systems_flags |= PLAYREADY_PROTECTION_SYSTEM_FLAG;
+  if (encryption_params.generate_widevine_pssh)
+    protection_systems_flags |= WIDEVINE_PROTECTION_SYSTEM_FLAG;
+
+  std::unique_ptr<KeySource> encryption_key_source;
+  switch (encryption_params.key_provider) {
+    case KeyProvider::kWidevine: {
+      const WidevineEncryptionParams& widevine = encryption_params.widevine;
+      if (widevine.key_server_url.empty()) {
+        LOG(ERROR) << "'key_server_url' should not be empty.";
+        return nullptr;
+      }
+      if (widevine.content_id.empty()) {
+        LOG(ERROR) << "'content_id' should not be empty.";
+        return nullptr;
+      }
+      std::unique_ptr<WidevineKeySource> widevine_key_source(
+          new WidevineKeySource(widevine.key_server_url,
+                                protection_systems_flags));
+      widevine_key_source->set_protection_scheme(protection_scheme);
+      if (!widevine.signer.signer_name.empty()) {
+        std::unique_ptr<RequestSigner> request_signer(
+            CreateSigner(widevine.signer));
+        if (!request_signer)
+          return nullptr;
+        widevine_key_source->set_signer(std::move(request_signer));
+      }
+      widevine_key_source->set_group_id(widevine.group_id);
+      widevine_key_source->set_enable_entitlement_license(
+          widevine.enable_entitlement_license);
+
+      Status status =
+          widevine_key_source->FetchKeys(widevine.content_id, widevine.policy);
+      if (!status.ok()) {
+        LOG(ERROR) << "Widevine encryption key source failed to fetch keys: "
+                   << status.ToString();
+        return nullptr;
+      }
+      encryption_key_source = std::move(widevine_key_source);
+      break;
     }
-    Status status = widevine_key_source->FetchKeys(content_id, FLAGS_policy);
-    if (!status.ok()) {
-      LOG(ERROR) << "Widevine encryption key source failed to fetch keys: "
-                 << status.ToString();
-      return std::unique_ptr<KeySource>();
+    case KeyProvider::kRawKey: {
+      encryption_key_source = RawKeySource::Create(encryption_params.raw_key,
+                                                   protection_systems_flags);
+      break;
     }
-    encryption_key_source = std::move(widevine_key_source);
-  } else if (FLAGS_enable_fixed_key_encryption) {
-    encryption_key_source = FixedKeySource::CreateFromHexStrings(
-        FLAGS_key_id, FLAGS_key, FLAGS_pssh, FLAGS_iv);
+    case KeyProvider::kPlayReady: {
+      const PlayReadyEncryptionParams& playready = encryption_params.playready;
+      if (!playready.key_server_url.empty() ||
+          !playready.program_identifier.empty()) {
+        if (playready.key_server_url.empty() ||
+            playready.program_identifier.empty()) {
+          LOG(ERROR) << "Either playready key_server_url or program_identifier "
+                        "is not set.";
+          return nullptr;
+        }
+        std::unique_ptr<PlayReadyKeySource> playready_key_source;
+        // private_key_password is allowed to be empty for unencrypted key.
+        if (!playready.client_cert_file.empty() ||
+            !playready.client_cert_private_key_file.empty()) {
+          if (playready.client_cert_file.empty() ||
+              playready.client_cert_private_key_file.empty()) {
+            LOG(ERROR) << "Either playready client_cert_file or "
+                          "client_cert_private_key_file is not set.";
+            return nullptr;
+          }
+          playready_key_source.reset(new PlayReadyKeySource(
+              playready.key_server_url, playready.client_cert_file,
+              playready.client_cert_private_key_file,
+              playready.client_cert_private_key_password,
+              protection_systems_flags));
+        } else {
+          playready_key_source.reset(new PlayReadyKeySource(
+              playready.key_server_url, protection_systems_flags));
+        }
+        if (!playready.ca_file.empty()) {
+          playready_key_source->SetCaFile(playready.ca_file);
+        }
+        playready_key_source->FetchKeysWithProgramIdentifier(
+            playready.program_identifier);
+        encryption_key_source = std::move(playready_key_source);
+      } else {
+        LOG(ERROR) << "Error creating PlayReady key source.";
+        return nullptr;
+      }
+      break;
+    }
+    case KeyProvider::kNone:
+      break;
   }
   return encryption_key_source;
 }
 
-std::unique_ptr<KeySource> CreateDecryptionKeySource() {
+std::unique_ptr<KeySource> CreateDecryptionKeySource(
+    const DecryptionParams& decryption_params) {
   std::unique_ptr<KeySource> decryption_key_source;
-  if (FLAGS_enable_widevine_decryption) {
-    std::unique_ptr<WidevineKeySource> widevine_key_source(
-        new WidevineKeySource(FLAGS_key_server_url, FLAGS_include_common_pssh));
-    if (!FLAGS_signer.empty()) {
-      std::unique_ptr<RequestSigner> request_signer(CreateSigner());
-      if (!request_signer)
+  switch (decryption_params.key_provider) {
+    case KeyProvider::kWidevine: {
+      const WidevineDecryptionParams& widevine = decryption_params.widevine;
+      if (widevine.key_server_url.empty()) {
+        LOG(ERROR) << "'key_server_url' should not be empty.";
         return std::unique_ptr<KeySource>();
-      widevine_key_source->set_signer(std::move(request_signer));
-    }
+      }
+      std::unique_ptr<WidevineKeySource> widevine_key_source(new WidevineKeySource(
+          widevine.key_server_url,
+          WIDEVINE_PROTECTION_SYSTEM_FLAG /* value does not matter here */));
+      if (!widevine.signer.signer_name.empty()) {
+        std::unique_ptr<RequestSigner> request_signer(
+            CreateSigner(widevine.signer));
+        if (!request_signer)
+          return std::unique_ptr<KeySource>();
+        widevine_key_source->set_signer(std::move(request_signer));
+      }
 
-    decryption_key_source = std::move(widevine_key_source);
-  } else if (FLAGS_enable_fixed_key_decryption) {
-    const char kNoPssh[] = "";
-    const char kNoIv[] = "";
-    decryption_key_source = FixedKeySource::CreateFromHexStrings(
-        FLAGS_key_id, FLAGS_key, kNoPssh, kNoIv);
+      decryption_key_source = std::move(widevine_key_source);
+      break;
+    }
+    case KeyProvider::kRawKey: {
+      decryption_key_source = RawKeySource::Create(
+          decryption_params.raw_key,
+          COMMON_PROTECTION_SYSTEM_FLAG /* value does not matter here*/);
+      break;
+    }
+    case KeyProvider::kNone:
+    case KeyProvider::kPlayReady:
+      break;
   }
   return decryption_key_source;
 }
 
-bool AssignFlagsFromProfile() {
-  bool single_segment = FLAGS_single_segment;
-  if (FLAGS_profile == "on-demand") {
-    single_segment = true;
-  } else if (FLAGS_profile == "live") {
-    single_segment = false;
-  } else if (FLAGS_profile != "") {
-    fprintf(stderr, "ERROR: --profile '%s' is not supported.\n",
-            FLAGS_profile.c_str());
-    return false;
-  }
-
-  if (FLAGS_single_segment != single_segment) {
-    FLAGS_single_segment = single_segment;
-    fprintf(stdout, "Profile %s: set --single_segment to %s.\n",
-            FLAGS_profile.c_str(), single_segment ? "true" : "false");
-  }
-  return true;
-}
-
-bool GetMuxerOptions(MuxerOptions* muxer_options) {
-  DCHECK(muxer_options);
-
-  muxer_options->single_segment = FLAGS_single_segment;
-  muxer_options->segment_duration = FLAGS_segment_duration;
-  muxer_options->fragment_duration = FLAGS_fragment_duration;
-  muxer_options->segment_sap_aligned = FLAGS_segment_sap_aligned;
-  muxer_options->fragment_sap_aligned = FLAGS_fragment_sap_aligned;
-  muxer_options->num_subsegments_per_sidx = FLAGS_num_subsegments_per_sidx;
-  muxer_options->webm_subsample_encryption = FLAGS_webm_subsample_encryption;
-  if (FLAGS_mp4_use_decoding_timestamp_in_timeline) {
-    LOG(WARNING) << "Flag --mp4_use_decoding_timestamp_in_timeline is set. "
-                    "Note that it is a temporary hack to workaround Chromium "
-                    "bug https://crbug.com/398130. The flag may be removed "
-                    "when the Chromium bug is fixed.";
-  }
-  muxer_options->mp4_use_decoding_timestamp_in_timeline =
-      FLAGS_mp4_use_decoding_timestamp_in_timeline;
-
-  muxer_options->temp_dir = FLAGS_temp_dir;
-  return true;
-}
-
-bool GetMpdOptions(MpdOptions* mpd_options) {
-  DCHECK(mpd_options);
-
-  mpd_options->availability_time_offset = FLAGS_availability_time_offset;
-  mpd_options->minimum_update_period = FLAGS_minimum_update_period;
-  mpd_options->min_buffer_time = FLAGS_min_buffer_time;
-  mpd_options->time_shift_buffer_depth = FLAGS_time_shift_buffer_depth;
-  mpd_options->suggested_presentation_delay =
-      FLAGS_suggested_presentation_delay;
-  return true;
-}
-
-MediaStream* FindFirstStreamOfType(const std::vector<MediaStream*>& streams,
-                                   StreamType stream_type) {
-  typedef std::vector<MediaStream*>::const_iterator StreamIterator;
-  for (StreamIterator it = streams.begin(); it != streams.end(); ++it) {
-    if ((*it)->info()->stream_type() == stream_type)
-      return *it;
-  }
-  return NULL;
-}
-MediaStream* FindFirstVideoStream(const std::vector<MediaStream*>& streams) {
-  return FindFirstStreamOfType(streams, kStreamVideo);
-}
-MediaStream* FindFirstAudioStream(const std::vector<MediaStream*>& streams) {
-  return FindFirstStreamOfType(streams, kStreamAudio);
-}
-
-bool AddStreamToMuxer(const std::vector<MediaStream*>& streams,
-                      const std::string& stream_selector,
-                      const std::string& language_override,
-                      Muxer* muxer) {
-  DCHECK(muxer);
-
-  MediaStream* stream = NULL;
-  if (stream_selector == "video") {
-    stream = FindFirstVideoStream(streams);
-  } else if (stream_selector == "audio") {
-    stream = FindFirstAudioStream(streams);
-  } else {
-    // Expect stream_selector to be a zero based stream id.
-    size_t stream_id;
-    if (!base::StringToSizeT(stream_selector, &stream_id) ||
-        stream_id >= streams.size()) {
-      LOG(ERROR) << "Invalid argument --stream=" << stream_selector << "; "
-                 << "should be 'audio', 'video', or a number within [0, "
-                 << streams.size() - 1 << "].";
-      return false;
-    }
-    stream = streams[stream_id];
-    DCHECK(stream);
-  }
-
-  // This could occur only if stream_selector=audio|video and the corresponding
-  // stream does not exist in the input.
-  if (!stream) {
-    LOG(ERROR) << "No " << stream_selector << " stream found in the input.";
-    return false;
-  }
-
-  if (!language_override.empty()) {
-    stream->info()->set_language(language_override);
-  }
-
-  muxer->AddStream(stream);
-  return true;
+MpdOptions GetMpdOptions(bool on_demand_profile,
+                         const MpdParams& mpd_params,
+                         double target_segment_duration) {
+  MpdOptions mpd_options;
+  mpd_options.dash_profile =
+      on_demand_profile ? DashProfile::kOnDemand : DashProfile::kLive;
+  mpd_options.mpd_type =
+      (on_demand_profile || mpd_params.generate_static_live_mpd)
+          ? MpdType::kStatic
+          : MpdType::kDynamic;
+  mpd_options.mpd_params = mpd_params;
+  mpd_options.target_segment_duration = target_segment_duration;
+  return mpd_options;
 }
 
 }  // namespace media

@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef MEDIA_FORMATS_WEBM_WEBM_CONTENT_ENCODINGS_H_
-#define MEDIA_FORMATS_WEBM_WEBM_CONTENT_ENCODINGS_H_
+#ifndef PACKAGER_MEDIA_FORMATS_WEBM_WEBM_CONTENT_ENCODINGS_H_
+#define PACKAGER_MEDIA_FORMATS_WEBM_WEBM_CONTENT_ENCODINGS_H_
 
 #include <stdint.h>
 #include <memory>
@@ -72,17 +72,18 @@ class ContentEncoding {
   void set_cipher_mode(CipherMode mode) { cipher_mode_ = mode; }
 
  private:
+  ContentEncoding(const ContentEncoding&) = delete;
+  ContentEncoding& operator=(const ContentEncoding&) = delete;
+
   int64_t order_;
   Scope scope_;
   Type type_;
   EncryptionAlgo encryption_algo_;
   std::string encryption_key_id_;
   CipherMode cipher_mode_;
-
-  DISALLOW_COPY_AND_ASSIGN(ContentEncoding);
 };
 
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_FORMATS_WEBM_WEBM_CONTENT_ENCODINGS_H_
+#endif  // PACKAGER_MEDIA_FORMATS_WEBM_WEBM_CONTENT_ENCODINGS_H_

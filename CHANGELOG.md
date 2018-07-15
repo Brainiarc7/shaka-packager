@@ -1,3 +1,180 @@
+## [2.1.1] - 2018-07-03
+### Changed
+- Warn if HLS type is not set set to LIVE for UDP inputs (#347).
+- Use new vp09 codec string for WebM by default (#406). Set command line flag:
+  `--use_legacy_vp9_codec_string` if the old behavior is needed.
+- Allow trailing null bytes in NAL units, to allow contents with the H264 spec
+  violation to be processed instead of erroring out (#418).
+
+### Fixed
+- Fix MPD@duration not set with MPDGenerator (#401). This is a regression
+  introduced in v2.0.1.
+- Remove 'wvtt' in HLS master playlist codec string as it breaks some old Apple
+  products, e.g. AppleTV3 (#402).
+- Fix potential text Segment Timeline not being grouped together in DASH mpd
+  (#417), which happens when `--allow_approximate_segment_timeline` is set.
+
+## [2.1.0] - 2018-05-22
+### Added
+- Support Widevine and Playready PSSH generation internally in packager (#245).
+  Documentation will be updated later.
+- Support removing segments outside of live window in DASH and HLS (#223).
+- Support UTCTiming for DASH (#311).
+- Support approximate SegmentTimeline (#330) under flag
+  --allow_approximate_segment_timeline. The flag is disabled by default and it
+  will be enabled in a later release.
+- Support UDP Source Specific Multicast (SSM) (#332).
+- Support elementary audio (Packed Audio) for HLS (#342).
+- Support FLAC codec (#345).
+- Support AAC with program_config_element (#387).
+- Support Widevine entitlement license with dual PSSH.
+- Add license notice in --licenses.
+
+### Changed
+- Ignore unsupported audio codec in the source content (#395). This allows other
+  supported streams to be processed and packaged.
+
+### Fixed
+- Fix bitrate for DASH on-demand profile too (#376).
+- Fix Ad Cues and EXT-X-KEY tag handling in HLS iFrames only playlist
+  (#378, #396).
+- Skip Style and Region Blocks in the source instead of failing (#380).
+- Fix potential slice header size off by one byte in H265 (#383).
+- Fix potential partial DASH segments during live packaging (#386).
+- Fix incorrect BOM used in WEBVTT header (#397).
+- Fix TS mimetype in DASH.
+
+## [2.0.3] - 2018-04-23
+### Changed
+- Removed --pto_adjustment flag (related to #368).
+
+### Fixed
+- Use max bitrate in Representation@bandwidth instead of average bitrate (#376).
+- Set Widevine key request content-type to JSON instead of xml (#372).
+- Fix default_language not working if 2-char code is used (#371).
+- Do not force earliest_presentation_time to 0 for VOD (#303).
+- Generate more precise time in Period@duration (#368). This avoids possible
+  rounding error in MSE causing frames to be dropped.
+
+## [2.0.2] - 2018-03-27
+### Added
+- Support cue alignment from multiple demuxed streams (#355).
+
+## [2.0.1] - 2018-03-05
+### Added
+- Recognize m4s as a valid extension for init segment (#331). It is used to be
+  allowed as the extension for media segments only.
+- Improve DASH multi-period support: calculate presentationTimeOffset and
+  Period@duration from video segment presentation timestamps. This avoids
+  video playback jitters due to gaps.
+
+### Fixed
+- Handle invalid WebVTT with start_time == end_time gracefully (#335).
+- Ignore invalid `meta` box in mp4 files, which Android's camera app generates
+  (#319).
+- Set stream duration in init segment for mp4 with static live profile (#340).
+
+## [2.0.0] - 2018-02-10
+### Added
+- Enhanced HLS support.
+  - Support for attributes RESOLUTION, CHANNELS, AUTOSELECT and DEFAULT.
+  - Live and Event playlists.
+  - fMP4 in HLS (including byte range support).
+  - DRM: Widevine and Fairplay.
+  - I-Frame playlist.
+- Enhanced subtitle support.
+  - Segmented WebVTT in fMP4.
+  - Segmented WebVTT in text, for HLS.
+- Support generating DASH + HLS manifests simultaneously (#262).
+- AC3 / E-AC3 support.
+- Experimental multi-period support.
+- Raw key multi-key support.
+- DASH Trickplay.
+- Make fMP4 output CMAF compatible.
+- Support for WebM colour element.
+- Support skip_encryption stream descriptor fields (#219).
+- Improved documentation and tutorials.
+
+### Changed
+- Refactored packager code and media pipeline.
+- Exposed top level packaging interface.
+- Renamed --webm_subsample_encryption flag to --vp9_subsample_encryption flag.
+- Deprecated --availability_time_offset flag.
+
+### Fixed
+- Write manifests atomically to fix possible truncated manifests seen on clients
+  (#186).
+- [WebM] Fix live segmenter overflow if longer than two hours (#233).
+- Fix a possible interferenace problem when re-using UDP multicast streams in
+  different processes (#241).
+- Create directories in the output path if not exist (#276).
+- Fix order of H265 VPS, SPS, PPS in hvcC box (#297).
+- Handle additional unused mdat properly (#298).
+- Fix possible incorrect HEVC decoder configuration data (#312).
+- Handle varying parameter sets in sample when converting from NAL unit stream
+  to byte stream (#327).
+
+## [1.6.2] - 2017-04-18
+### Added
+- Added an option to keep parameter set NAL units (SPS/PPS for H264,
+  SPS/PPS/VPS for H265), which is necessary if the parameter set NAL units
+  are varying from frame to frame. The flag is --strip_parameter_set_nalus,
+  which is true by default. This addresses #206 (the flag needs to be set to
+  false).
+
+### Fixed
+- Fixed the problem that sliding window logic is still active with DASH static
+  live profile (#218).
+- Fixed AAC-HE not correctly signaled in codec string (#225).
+- [WebM] Fixed output truncated if using the same file for both input and
+  output (#210).
+- [WebM] Fixed possible integer overflow in stream duration in MPD manifest
+  (#214).
+
+## [1.6.1] - 2017-02-10
+### Changed
+- Enable --generate_dash_if_iop_compliant_mpd by default. This moves
+  ContentProtection element from Representation to AdaptationSet. The feature
+  can still be disabled by setting the flag to false if needed.
+
+### Fixed
+- MPD duration not set for live profile with static mpd (#201).
+
+## [1.6.0] - 2017-01-13
+### Added
+- Added support for Windows (both 32-bit and 64-bit are supported).
+- Added support for live profile with static mpd by setting flag
+  --generate_static_mpd (#142). This allows on demand content to use segment
+  template.
+- Added support for tagging a specific audio AdaptationSet as the default /
+  main AdaptationSet with --default_language flag (#155).
+- Added UDP options support: udp://ip:port[?options]. Currently three options
+  are supported: reuse=1|0 whether reusing UDP sockets are allowed (#133),
+  interface=a.b.c.d interface address, timeout=microseconds for socket timeout.
+- Added 4K and 8K encryption support (#163).
+
+### Changed
+- [WebM][VP9] Use subsample encryption by default for VP9 per latest WebM spec.
+  The feature can be disabled by setting --webm_subsample_encryption=false.
+- [WebM] Mimic mp4 behavior: either all the samples in a segment are encrypted
+  or all the samples are clear.
+- [WebM] Move index segment forward to right after init segment (#159).
+
+### Fixed
+- Fixed AdaptationSet switching signalling when
+  --generate_dash_if_iop_compliant_mpd is enabled (#156).
+- [H.264] Fixed access unit detection problem if there are multiple video slice
+  NAL units in the same frame (#134).
+- [WebVTT] Detect .webvtt as WebVTT files.
+- [WebM] Fixed keyframe detection in BlockGroup for encrypted frames.
+- [HLS] Fixed HLS playlist problem when clear lead is set to zero (#169).
+- Fixed --version command.
+
+### Deprecated
+- Deprecated flag --udp_interface_address. Use udp options instead.
+- Deprecated flags --single_segment and --profile. They are now derived from
+  the presence of 'segment_template' in stream descriptors.
+
 ## [1.5.1] - 2016-07-25
 ### Added
 - Added a runtime flag to use dts in timeline for mp4:
@@ -187,6 +364,15 @@ First public release.
 - Added mpd_generator driver program to generate mpd file from packager generated
   intermediate files.
 
+[2.1.1]: https://github.com/google/shaka-packager/compare/v2.1.0...v2.1.1
+[2.1.0]: https://github.com/google/shaka-packager/compare/v2.0.3...v2.1.0
+[2.0.3]: https://github.com/google/shaka-packager/compare/v2.0.2...v2.0.3
+[2.0.2]: https://github.com/google/shaka-packager/compare/v2.0.1...v2.0.2
+[2.0.1]: https://github.com/google/shaka-packager/compare/v2.0.0...v2.0.1
+[2.0.0]: https://github.com/google/shaka-packager/compare/v1.6.2...v2.0.0
+[1.6.2]: https://github.com/google/shaka-packager/compare/v1.6.1...v1.6.2
+[1.6.1]: https://github.com/google/shaka-packager/compare/v1.6.0...v1.6.1
+[1.6.0]: https://github.com/google/shaka-packager/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/google/shaka-packager/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/google/shaka-packager/compare/v1.4.0...v1.5.0
 [1.4.1]: https://github.com/google/shaka-packager/compare/v1.4.0...v1.4.1

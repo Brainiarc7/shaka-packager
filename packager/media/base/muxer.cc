@@ -8,78 +8,25 @@
 
 #include <algorithm>
 
-#include "packager/media/base/fourccs.h"
 #include "packager/media/base/media_sample.h"
-#include "packager/media/base/media_stream.h"
+#include "packager/media/base/muxer_util.h"
+#include "packager/status_macros.h"
 
 namespace shaka {
 namespace media {
+namespace {
+const bool kInitialEncryptionInfo = true;
+const int64_t kStartTime = 0;
+}  // namespace
 
-Muxer::Muxer(const MuxerOptions& options)
-    : options_(options),
-      initialized_(false),
-      encryption_key_source_(NULL),
-      max_sd_pixels_(0),
-      clear_lead_in_seconds_(0),
-      crypto_period_duration_in_seconds_(0),
-      protection_scheme_(FOURCC_NULL),
-      cancelled_(false),
-      clock_(NULL) {}
+Muxer::Muxer(const MuxerOptions& options) : options_(options) {
+  // "$" is only allowed if the output file name is a template, which is used to
+  // support one file per Representation per Period when there are Ad Cues.
+  if (options_.output_file_name.find("$") != std::string::npos)
+    output_file_template_ = options_.output_file_name;
+}
 
 Muxer::~Muxer() {}
-
-void Muxer::SetKeySource(KeySource* encryption_key_source,
-                         uint32_t max_sd_pixels,
-                         double clear_lead_in_seconds,
-                         double crypto_period_duration_in_seconds,
-                         FourCC protection_scheme) {
-  DCHECK(encryption_key_source);
-  encryption_key_source_ = encryption_key_source;
-  max_sd_pixels_ = max_sd_pixels;
-  clear_lead_in_seconds_ = clear_lead_in_seconds;
-  crypto_period_duration_in_seconds_ = crypto_period_duration_in_seconds;
-  protection_scheme_ = protection_scheme;
-}
-
-void Muxer::AddStream(MediaStream* stream) {
-  DCHECK(stream);
-  stream->Connect(this);
-  streams_.push_back(stream);
-}
-
-Status Muxer::Run() {
-  DCHECK(!streams_.empty());
-
-  Status status;
-  // Start the streams.
-  for (std::vector<MediaStream*>::iterator it = streams_.begin();
-       it != streams_.end();
-       ++it) {
-    status = (*it)->Start(MediaStream::kPull);
-    if (!status.ok())
-      return status;
-  }
-
-  uint32_t current_stream_id = 0;
-  while (status.ok()) {
-    if (cancelled_)
-      return Status(error::CANCELLED, "muxer run cancelled");
-
-    scoped_refptr<MediaSample> sample;
-    status = streams_[current_stream_id]->PullSample(&sample);
-    if (!status.ok())
-      break;
-    status = AddSample(streams_[current_stream_id], sample);
-
-    // Switch to next stream if the current stream is ready for fragmentation.
-    if (status.error_code() == error::FRAGMENT_FINALIZED) {
-      current_stream_id = (current_stream_id + 1) % streams_.size();
-      status.Clear();
-    }
-  }
-  // Finalize the muxer after reaching end of stream.
-  return status.error_code() == error::END_OF_STREAM ? Finalize() : status;
-}
 
 void Muxer::Cancel() {
   cancelled_ = true;
@@ -94,26 +41,83 @@ void Muxer::SetProgressListener(
   progress_listener_ = std::move(progress_listener);
 }
 
-Status Muxer::AddSample(const MediaStream* stream,
-                        scoped_refptr<MediaSample> sample) {
-  DCHECK(std::find(streams_.begin(), streams_.end(), stream) != streams_.end());
+Status Muxer::Process(std::unique_ptr<StreamData> stream_data) {
+  Status status;
+  switch (stream_data->stream_data_type) {
+    case StreamDataType::kStreamInfo:
+      streams_.push_back(std::move(stream_data->stream_info));
+      return ReinitializeMuxer(kStartTime);
+    case StreamDataType::kSegmentInfo: {
+      const auto& segment_info = *stream_data->segment_info;
+      if (muxer_listener_ && segment_info.is_encrypted) {
+        const EncryptionConfig* encryption_config =
+            segment_info.key_rotation_encryption_config.get();
+        // Only call OnEncryptionInfoReady again when key updates.
+        if (encryption_config && encryption_config->key_id != current_key_id_) {
+          muxer_listener_->OnEncryptionInfoReady(
+              !kInitialEncryptionInfo, encryption_config->protection_scheme,
+              encryption_config->key_id, encryption_config->constant_iv,
+              encryption_config->key_system_info);
+          current_key_id_ = encryption_config->key_id;
+        }
+        if (!encryption_started_) {
+          encryption_started_ = true;
+          muxer_listener_->OnEncryptionStart();
+        }
+      }
+      return FinalizeSegment(stream_data->stream_index, segment_info);
+    }
+    case StreamDataType::kMediaSample:
+      return AddSample(stream_data->stream_index, *stream_data->media_sample);
+    case StreamDataType::kCueEvent:
+      if (muxer_listener_) {
+        const int64_t time_scale =
+            streams_[stream_data->stream_index]->time_scale();
+        const double time_in_seconds = stream_data->cue_event->time_in_seconds;
+        const int64_t scaled_time =
+            static_cast<int64_t>(time_in_seconds * time_scale);
+        muxer_listener_->OnCueEvent(scaled_time,
+                                    stream_data->cue_event->cue_data);
 
-  if (!initialized_) {
-    Status status = Initialize();
-    if (!status.ok())
-      return status;
-    initialized_ = true;
+        // Finalize and re-initialize Muxer to generate different content files.
+        if (!output_file_template_.empty()) {
+          RETURN_IF_ERROR(Finalize());
+          RETURN_IF_ERROR(ReinitializeMuxer(scaled_time));
+        }
+      }
+      break;
+    default:
+      VLOG(3) << "Stream data type "
+              << static_cast<int>(stream_data->stream_data_type) << " ignored.";
+      break;
   }
-  if (sample->end_of_stream()) {
-    // EOS sample should be sent only when the sample was pushed from Demuxer
-    // to Muxer. In this case, there should be only one stream in Muxer.
-    DCHECK_EQ(1u, streams_.size());
-    return Finalize();
-  } else if (sample->is_encrypted()) {
-    LOG(ERROR) << "Unable to multiplex encrypted media sample";
-    return Status(error::INTERNAL_ERROR, "Encrypted media sample.");
+  // No dispatch for muxer.
+  return Status::OK;
+}
+
+Status Muxer::OnFlushRequest(size_t input_stream_index) {
+  return Finalize();
+}
+
+Status Muxer::ReinitializeMuxer(int64_t timestamp) {
+  if (muxer_listener_ && streams_.back()->is_encrypted()) {
+    const EncryptionConfig& encryption_config =
+        streams_.back()->encryption_config();
+    muxer_listener_->OnEncryptionInfoReady(
+        kInitialEncryptionInfo, encryption_config.protection_scheme,
+        encryption_config.key_id, encryption_config.constant_iv,
+        encryption_config.key_system_info);
+    current_key_id_ = encryption_config.key_id;
   }
-  return DoAddSample(stream, sample);
+  if (!output_file_template_.empty()) {
+    // Update |output_file_index| and |output_file_name| with an actual file
+    // name, which will be used by the subclasses.
+    options_.output_file_index = output_file_index_;
+    options_.output_file_name =
+        GetSegmentName(output_file_template_, timestamp, output_file_index_++,
+                       options_.bandwidth);
+  }
+  return InitializeMuxer();
 }
 
 }  // namespace media

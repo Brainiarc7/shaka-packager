@@ -6,15 +6,19 @@
 
 #include "packager/media/formats/mp4/multi_segment_segmenter.h"
 
+#include <algorithm>
+
 #include "packager/base/strings/string_number_conversions.h"
 #include "packager/base/strings/string_util.h"
+#include "packager/file/file.h"
+#include "packager/file/file_closer.h"
 #include "packager/media/base/buffer_writer.h"
-#include "packager/media/base/media_stream.h"
 #include "packager/media/base/muxer_options.h"
 #include "packager/media/base/muxer_util.h"
 #include "packager/media/event/muxer_listener.h"
-#include "packager/media/file/file.h"
 #include "packager/media/formats/mp4/box_definitions.h"
+#include "packager/media/formats/mp4/key_frame_info.h"
+#include "packager/status_macros.h"
 
 namespace shaka {
 namespace media {
@@ -29,105 +33,58 @@ MultiSegmentSegmenter::MultiSegmentSegmenter(const MuxerOptions& options,
   // Use the same brands for styp as ftyp.
   styp_->major_brand = Segmenter::ftyp()->major_brand;
   styp_->compatible_brands = Segmenter::ftyp()->compatible_brands;
+  // Replace 'cmfc' with 'cmfs' for CMAF segments compatibility.
+  std::replace(styp_->compatible_brands.begin(), styp_->compatible_brands.end(),
+               FOURCC_cmfc, FOURCC_cmfs);
 }
 
 MultiSegmentSegmenter::~MultiSegmentSegmenter() {}
 
 bool MultiSegmentSegmenter::GetInitRange(size_t* offset, size_t* size) {
-  DLOG(INFO) << "MultiSegmentSegmenter outputs init segment: "
-             << options().output_file_name;
+  VLOG(1) << "MultiSegmentSegmenter outputs init segment: "
+          << options().output_file_name;
   return false;
 }
 
 bool MultiSegmentSegmenter::GetIndexRange(size_t* offset, size_t* size) {
-  DLOG(INFO) << "MultiSegmentSegmenter does not have index range.";
+  VLOG(1) << "MultiSegmentSegmenter does not have index range.";
   return false;
 }
 
+std::vector<Range> MultiSegmentSegmenter::GetSegmentRanges() {
+  VLOG(1) << "MultiSegmentSegmenter does not have media segment ranges.";
+  return std::vector<Range>();
+}
+
 Status MultiSegmentSegmenter::DoInitialize() {
+  return WriteInitSegment();
+}
+
+Status MultiSegmentSegmenter::DoFinalize() {
+  // Update init segment with media duration set.
+  RETURN_IF_ERROR(WriteInitSegment());
+  SetComplete();
+  return Status::OK;
+}
+
+Status MultiSegmentSegmenter::DoFinalizeSegment() {
+  return WriteSegment();
+}
+
+Status MultiSegmentSegmenter::WriteInitSegment() {
   DCHECK(ftyp());
   DCHECK(moov());
   // Generate the output file with init segment.
-  File* file = File::Open(options().output_file_name.c_str(), "w");
-  if (file == NULL) {
+  std::unique_ptr<File, FileCloser> file(
+      File::Open(options().output_file_name.c_str(), "w"));
+  if (!file) {
     return Status(error::FILE_FAILURE,
                   "Cannot open file for write " + options().output_file_name);
   }
   std::unique_ptr<BufferWriter> buffer(new BufferWriter);
   ftyp()->Write(buffer.get());
   moov()->Write(buffer.get());
-  Status status = buffer->WriteToFile(file);
-  if (!file->Close()) {
-    LOG(WARNING) << "Failed to close the file properly: "
-                 << options().output_file_name;
-  }
-  return status;
-}
-
-Status MultiSegmentSegmenter::DoFinalize() {
-  SetComplete();
-  return Status::OK;
-}
-
-Status MultiSegmentSegmenter::DoFinalizeSegment() {
-  DCHECK(sidx());
-  // earliest_presentation_time is the earliest presentation time of any
-  // access unit in the reference stream in the first subsegment.
-  // It will be re-calculated later when subsegments are finalized.
-  sidx()->earliest_presentation_time =
-      sidx()->references[0].earliest_presentation_time;
-
-  if (options().num_subsegments_per_sidx <= 0)
-    return WriteSegment();
-
-  // sidx() contains pre-generated segment references with one reference per
-  // fragment. Calculate |num_fragments_per_subsegment| and combine
-  // pre-generated references into final subsegment references.
-  uint32_t num_fragments = sidx()->references.size();
-  uint32_t num_fragments_per_subsegment =
-      (num_fragments - 1) / options().num_subsegments_per_sidx + 1;
-  if (num_fragments_per_subsegment <= 1)
-    return WriteSegment();
-
-  uint32_t frag_index = 0;
-  uint32_t subseg_index = 0;
-  std::vector<SegmentReference>& refs = sidx()->references;
-  uint64_t first_sap_time =
-      refs[0].sap_delta_time + refs[0].earliest_presentation_time;
-  for (uint32_t i = 1; i < num_fragments; ++i) {
-    refs[subseg_index].referenced_size += refs[i].referenced_size;
-    refs[subseg_index].subsegment_duration += refs[i].subsegment_duration;
-    refs[subseg_index].earliest_presentation_time =
-        std::min(refs[subseg_index].earliest_presentation_time,
-                 refs[i].earliest_presentation_time);
-    if (refs[subseg_index].sap_type == SegmentReference::TypeUnknown &&
-        refs[i].sap_type != SegmentReference::TypeUnknown) {
-      refs[subseg_index].sap_type = refs[i].sap_type;
-      first_sap_time =
-          refs[i].sap_delta_time + refs[i].earliest_presentation_time;
-    }
-    if (++frag_index >= num_fragments_per_subsegment) {
-      // Calculate sap delta time w.r.t. sidx_->earliest_presentation_time.
-      if (refs[subseg_index].sap_type != SegmentReference::TypeUnknown) {
-        refs[subseg_index].sap_delta_time =
-            first_sap_time - refs[subseg_index].earliest_presentation_time;
-      }
-      if (++i >= num_fragments)
-        break;
-      refs[++subseg_index] = refs[i];
-      first_sap_time =
-          refs[i].sap_delta_time + refs[i].earliest_presentation_time;
-      frag_index = 1;
-    }
-  }
-
-  refs.resize(options().num_subsegments_per_sidx);
-
-  // earliest_presentation_time is the earliest presentation time of any
-  // access unit in the reference stream in the first subsegment.
-  sidx()->earliest_presentation_time = refs[0].earliest_presentation_time;
-
-  return WriteSegment();
+  return buffer->WriteToFile(file.get());
 }
 
 Status MultiSegmentSegmenter::WriteSegment() {
@@ -136,45 +93,61 @@ Status MultiSegmentSegmenter::WriteSegment() {
   DCHECK(styp_);
 
   std::unique_ptr<BufferWriter> buffer(new BufferWriter());
-  File* file;
+  std::unique_ptr<File, FileCloser> file;
   std::string file_name;
   if (options().segment_template.empty()) {
     // Append the segment to output file if segment template is not specified.
     file_name = options().output_file_name.c_str();
-    file = File::Open(file_name.c_str(), "a");
-    if (file == NULL) {
-      return Status(
-          error::FILE_FAILURE,
-          "Cannot open file for append " + options().output_file_name);
+    file.reset(File::Open(file_name.c_str(), "a"));
+    if (!file) {
+      return Status(error::FILE_FAILURE, "Cannot open file for append " +
+                                             options().output_file_name);
     }
   } else {
     file_name = GetSegmentName(options().segment_template,
                                sidx()->earliest_presentation_time,
                                num_segments_++, options().bandwidth);
-    file = File::Open(file_name.c_str(), "w");
-    if (file == NULL) {
+    file.reset(File::Open(file_name.c_str(), "w"));
+    if (!file) {
       return Status(error::FILE_FAILURE,
                     "Cannot open file for write " + file_name);
     }
     styp_->Write(buffer.get());
   }
 
-  // If num_subsegments_per_sidx is negative, no SIDX box is generated.
-  if (options().num_subsegments_per_sidx >= 0)
+  if (options().mp4_params.generate_sidx_in_media_segments) {
+    DCHECK(sidx());
+    DCHECK(!sidx()->references.empty());
+    // earliest_presentation_time is the earliest presentation time of any
+    // access unit in the reference stream in the first subsegment.
+    sidx()->earliest_presentation_time =
+        sidx()->references[0].earliest_presentation_time;
     sidx()->Write(buffer.get());
+  }
 
-  const size_t segment_size = buffer->Size() + fragment_buffer()->Size();
+  const size_t segment_header_size = buffer->Size();
+  const size_t segment_size = segment_header_size + fragment_buffer()->Size();
   DCHECK_NE(segment_size, 0u);
 
-  Status status = buffer->WriteToFile(file);
-  if (status.ok())
-    status = fragment_buffer()->WriteToFile(file);
+  RETURN_IF_ERROR(buffer->WriteToFile(file.get()));
+  if (muxer_listener()) {
+    for (const KeyFrameInfo& key_frame_info : key_frame_infos()) {
+      muxer_listener()->OnKeyFrame(
+          key_frame_info.timestamp,
+          segment_header_size + key_frame_info.start_byte_offset,
+          key_frame_info.size);
+    }
+  }
+  RETURN_IF_ERROR(fragment_buffer()->WriteToFile(file.get()));
 
-  if (!file->Close())
-    LOG(WARNING) << "Failed to close the file properly: " << file_name;
-
-  if (!status.ok())
-    return status;
+  // Close the file, which also does flushing, to make sure the file is written
+  // before manifest is updated.
+  if (!file.release()->Close()) {
+    return Status(
+        error::FILE_FAILURE,
+        "Cannot close file " + file_name +
+            ", possibly file permission issue or running out of disk space.");
+  }
 
   uint64_t segment_duration = 0;
   // ISO/IEC 23009-1:2012: the value shall be identical to sum of the the

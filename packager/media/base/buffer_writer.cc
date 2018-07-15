@@ -8,7 +8,7 @@
 
 #include "packager/base/logging.h"
 #include "packager/base/sys_byteorder.h"
-#include "packager/media/file/file.h"
+#include "packager/file/file.h"
 
 namespace shaka {
 namespace media {
@@ -53,6 +53,10 @@ void BufferWriter::AppendNBytes(uint64_t v, size_t num_bytes) {
 
 void BufferWriter::AppendVector(const std::vector<uint8_t>& v) {
   buf_.insert(buf_.end(), v.begin(), v.end());
+}
+
+void BufferWriter::AppendString(const std::string& s) {
+  buf_.insert(buf_.end(), s.begin(), s.end());
 }
 
 void BufferWriter::AppendArray(const uint8_t* buf, size_t size) {

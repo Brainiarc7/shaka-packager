@@ -5,9 +5,9 @@
 # https://developers.google.com/open-source/licenses/bsd
 
 {
-  'includes': [
-    '../../../common.gypi',
-  ],
+  'variables': {
+    'shaka_code': 1,
+  },
   'targets': [
     {
       'target_name': 'webm',
@@ -69,6 +69,7 @@
         'cluster_builder.cc',
         'cluster_builder.h',
         'encrypted_segmenter_unittest.cc',
+        'encryptor_unittest.cc',
         'multi_segment_segmenter_unittest.cc',
         'segmenter_test_base.cc',
         'segmenter_test_base.h',
@@ -82,9 +83,10 @@
         'webm_webvtt_parser_unittest.cc',
       ],
       'dependencies': [
+        '../../../file/file.gyp:file',
         '../../../testing/gtest.gyp:gtest',
         '../../../testing/gmock.gyp:gmock',
-        '../../file/file.gyp:file',
+        '../../../third_party/libwebm/libwebm.gyp:mkvmuxer',
         '../../test/media_test.gyp:media_test_support',
         'webm',
       ]

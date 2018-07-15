@@ -4,8 +4,8 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_BASE_PRODUCER_CONSUMER_QUEUE_H_
-#define MEDIA_BASE_PRODUCER_CONSUMER_QUEUE_H_
+#ifndef PACKAGER_MEDIA_BASE_PRODUCER_CONSUMER_QUEUE_H_
+#define PACKAGER_MEDIA_BASE_PRODUCER_CONSUMER_QUEUE_H_
 
 #include <deque>
 
@@ -13,7 +13,7 @@
 #include "packager/base/synchronization/condition_variable.h"
 #include "packager/base/synchronization/lock.h"
 #include "packager/base/timer/elapsed_timer.h"
-#include "packager/media/base/status.h"
+#include "packager/status.h"
 
 namespace shaka {
 namespace media {
@@ -317,4 +317,4 @@ void ProducerConsumerQueue<T>::SlideHeadOnCenter(size_t pos) {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_BASE_PRODUCER_CONSUMER_QUEUE_H_
+#endif  // PACKAGER_MEDIA_BASE_PRODUCER_CONSUMER_QUEUE_H_

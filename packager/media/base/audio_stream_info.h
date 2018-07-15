@@ -4,8 +4,8 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_BASE_AUDIO_STREAM_INFO_H_
-#define MEDIA_BASE_AUDIO_STREAM_INFO_H_
+#ifndef PACKAGER_MEDIA_BASE_AUDIO_STREAM_INFO_H_
+#define PACKAGER_MEDIA_BASE_AUDIO_STREAM_INFO_H_
 
 #include <vector>
 
@@ -27,10 +27,13 @@ class AudioStreamInfo : public StreamInfo {
                   uint32_t avg_bitrate, const std::string& language,
                   bool is_encrypted);
 
+  ~AudioStreamInfo() override;
+
   /// @name StreamInfo implementation overrides.
   /// @{
   bool IsValidConfig() const override;
   std::string ToString() const override;
+  std::unique_ptr<StreamInfo> Clone() const override;
   /// @}
 
   uint8_t sample_bits() const { return sample_bits_; }
@@ -54,8 +57,6 @@ class AudioStreamInfo : public StreamInfo {
   static std::string GetCodecString(Codec codec, uint8_t audio_object_type);
 
  private:
-  ~AudioStreamInfo() override;
-
   uint8_t sample_bits_;
   uint8_t num_channels_;
   uint32_t sampling_frequency_;
@@ -72,4 +73,4 @@ class AudioStreamInfo : public StreamInfo {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_BASE_AUDIO_STREAM_INFO_H_
+#endif  // PACKAGER_MEDIA_BASE_AUDIO_STREAM_INFO_H_

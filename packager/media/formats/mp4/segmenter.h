@@ -4,33 +4,36 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_FORMATS_MP4_SEGMENTER_H_
-#define MEDIA_FORMATS_MP4_SEGMENTER_H_
+#ifndef PACKAGER_MEDIA_FORMATS_MP4_SEGMENTER_H_
+#define PACKAGER_MEDIA_FORMATS_MP4_SEGMENTER_H_
 
 #include <map>
 #include <memory>
 #include <vector>
 
-#include "packager/base/memory/ref_counted.h"
+#include "packager/base/optional.h"
 #include "packager/media/base/fourccs.h"
-#include "packager/media/base/status.h"
+#include "packager/media/base/range.h"
 #include "packager/media/formats/mp4/box_definitions.h"
+#include "packager/status.h"
 
 namespace shaka {
 namespace media {
 
+struct EncryptionConfig;
 struct MuxerOptions;
+struct SegmentInfo;
 
 class BufferWriter;
-class KeySource;
 class MediaSample;
-class MediaStream;
 class MuxerListener;
 class ProgressListener;
+class StreamInfo;
 
 namespace mp4 {
 
 class Fragmenter;
+struct KeyFrameInfo;
 
 /// This class defines the Segmenter which is responsible for organizing
 /// fragments into segments/subsegments and package them into a MP4 file.
@@ -48,41 +51,33 @@ class Segmenter {
   /// Initialize the segmenter.
   /// Calling other public methods of this class without this method returning
   /// Status::OK results in an undefined behavior.
-  /// @param streams contains the vector of MediaStreams to be segmented.
+  /// @param streams contains the vector of StreamInfos for initialization.
   /// @param muxer_listener receives muxer events. Can be NULL.
   /// @param progress_listener receives progress updates. Can be NULL.
-  /// @param encryption_key_source points to the key source which contains
-  ///        the encryption keys. It can be NULL to indicate that no encryption
-  ///        is required.
-  /// @param max_sd_pixels specifies the threshold to determine whether a video
-  ///        track should be considered as SD or HD. If the track has more
-  ///        pixels per frame than max_sd_pixels, it is HD, SD otherwise.
-  /// @param clear_time specifies clear lead duration in seconds.
-  /// @param crypto_period_duration specifies crypto period duration in seconds.
-  /// @param protection_scheme specifies the protection scheme: 'cenc', 'cens',
-  ///        'cbc1', 'cbcs'.
   /// @return OK on success, an error status otherwise.
-  Status Initialize(const std::vector<MediaStream*>& streams,
-                    MuxerListener* muxer_listener,
-                    ProgressListener* progress_listener,
-                    KeySource* encryption_key_source,
-                    uint32_t max_sd_pixels,
-                    double clear_lead_in_seconds,
-                    double crypto_period_duration_in_seconds,
-                    FourCC protection_scheme);
+  Status Initialize(
+      const std::vector<std::shared_ptr<const StreamInfo>>& streams,
+      MuxerListener* muxer_listener,
+      ProgressListener* progress_listener);
 
   /// Finalize the segmenter.
   /// @return OK on success, an error status otherwise.
   Status Finalize();
 
   /// Add sample to the indicated stream.
-  /// @param stream points to the stream to which the sample belongs. It cannot
-  ///        be NULL.
+  /// @param stream_id is the zero-based stream index.
   /// @param sample points to the sample to be added.
   /// @return OK on success, an error status otherwise.
-  Status AddSample(const MediaStream* stream,
-                   scoped_refptr<MediaSample> sample);
+  Status AddSample(size_t stream_id, const MediaSample& sample);
 
+  /// Finalize the segment / subsegment.
+  /// @param stream_id is the zero-based stream index.
+  /// @param is_subsegment indicates if it is a subsegment (fragment).
+  /// @return OK on success, an error status otherwise.
+  Status FinalizeSegment(size_t stream_id, const SegmentInfo& segment_info);
+
+  // TODO(rkuroiwa): Change these Get*Range() methods to return
+  // base::Optional<Range> as well.
   /// @return true if there is an initialization range, while setting @a offset
   ///         and @a size; or false if initialization range does not apply.
   virtual bool GetInitRange(size_t* offset, size_t* size) = 0;
@@ -90,6 +85,11 @@ class Segmenter {
   /// @return true if there is an index byte range, while setting @a offset
   ///         and @a size; or false if index byte range does not apply.
   virtual bool GetIndexRange(size_t* offset, size_t* size) = 0;
+
+  // Returns an empty vector if there are no specific ranges for the segments,
+  // e.g. the media is in multiple files.
+  // Otherwise, a vector of ranges for the media segments are returned.
+  virtual std::vector<Range> GetSegmentRanges() = 0;
 
   uint32_t GetReferenceTimeScale() const;
 
@@ -113,6 +113,9 @@ class Segmenter {
   SegmentIndex* sidx() { return sidx_.get(); }
   MuxerListener* muxer_listener() { return muxer_listener_; }
   uint64_t progress_target() { return progress_target_; }
+  const std::vector<KeyFrameInfo>& key_frame_infos() const {
+    return key_frame_infos_;
+  }
 
   void set_progress_target(uint64_t progress_target) {
     progress_target_ = progress_target;
@@ -123,10 +126,12 @@ class Segmenter {
   virtual Status DoFinalize() = 0;
   virtual Status DoFinalizeSegment() = 0;
 
-  Status FinalizeSegment();
   uint32_t GetReferenceStreamId();
 
-  Status FinalizeFragment(bool finalize_segment, Fragmenter* fragment);
+  void FinalizeFragmentForKeyRotation(
+      size_t stream_id,
+      bool fragment_encrypted,
+      const EncryptionConfig& encryption_config);
 
   const MuxerOptions& options_;
   std::unique_ptr<FileType> ftyp_;
@@ -134,14 +139,14 @@ class Segmenter {
   std::unique_ptr<MovieFragment> moof_;
   std::unique_ptr<BufferWriter> fragment_buffer_;
   std::unique_ptr<SegmentIndex> sidx_;
-  std::vector<Fragmenter*> fragmenters_;
-  std::vector<uint64_t> segment_durations_;
-  std::map<const MediaStream*, uint32_t> stream_map_;
-  MuxerListener* muxer_listener_;
-  ProgressListener* progress_listener_;
-  uint64_t progress_target_;
-  uint64_t accumulated_progress_;
-  uint32_t sample_duration_;
+  std::vector<std::unique_ptr<Fragmenter>> fragmenters_;
+  MuxerListener* muxer_listener_ = nullptr;
+  ProgressListener* progress_listener_ = nullptr;
+  uint64_t progress_target_ = 0u;
+  uint64_t accumulated_progress_ = 0u;
+  uint32_t sample_duration_ = 0u;
+  std::vector<uint64_t> stream_durations_;
+  std::vector<KeyFrameInfo> key_frame_infos_;
 
   DISALLOW_COPY_AND_ASSIGN(Segmenter);
 };
@@ -150,4 +155,4 @@ class Segmenter {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_FORMATS_MP4_SEGMENTER_H_
+#endif  // PACKAGER_MEDIA_FORMATS_MP4_SEGMENTER_H_

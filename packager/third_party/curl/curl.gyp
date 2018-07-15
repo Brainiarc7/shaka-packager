@@ -16,7 +16,6 @@
         'defines': [
           'HTTP_ONLY',
           'USE_IPV6',
-          'USE_OPENSSL'
         ],
         'include_dirs': [
           'config',
@@ -37,6 +36,7 @@
             'defines': [
               'HAVE_CONFIG_H',
               'CURL_CA_BUNDLE="<!(config/linux/find_curl_ca_bundle.sh)"',
+              'USE_OPENSSL',
             ],
             'include_dirs': [
               'config/linux',
@@ -51,6 +51,7 @@
             'defines': [
               'HAVE_CONFIG_H',
               'CURL_CA_BUNDLE="<!(config/mac/find_curl_ca_bundle.sh)"',
+              'USE_OPENSSL',
             ],
             'include_dirs': [
               'config/mac',
@@ -61,10 +62,13 @@
           'direct_dependent_settings': {
             'defines': [
               'CURL_DISABLE_LDAP',
+              'USE_SCHANNEL',
+              'USE_WINDOWS_SSPI',
             ],
             'link_settings': {
               'libraries': [
                 '-lws2_32.lib',
+                '-lCrypt32.lib',
               ],
             },
           },
@@ -87,10 +91,11 @@
             'source/lib/system_win32.c',
             'source/lib/system_win32.h',
           ],
-          'defines': [
-            'BUILDING_LIBCURL',
-          ],
+          'msvs_disabled_warnings': [ 4267, ],
         }],
+      ],
+      'defines': [
+        'BUILDING_LIBCURL',
       ],
       'variables': {
         'clang_warning_flags': [
@@ -157,12 +162,12 @@
         'source/lib/hmac.c',
         'source/lib/hostasyn.c',
         'source/lib/hostcheck.c',
+        'source/lib/hostip.c',
         'source/lib/hostip4.c',
         'source/lib/hostip6.c',
-        'source/lib/hostip.c',
         'source/lib/hostsyn.c',
-        'source/lib/http2.c',
         'source/lib/http.c',
+        'source/lib/http2.c',
         'source/lib/http_chunks.c',
         'source/lib/http_digest.c',
         'source/lib/http_negotiate.c',
@@ -179,6 +184,7 @@
         'source/lib/md4.c',
         'source/lib/md5.c',
         'source/lib/memdebug.c',
+        'source/lib/mime.c',
         'source/lib/mprintf.c',
         'source/lib/multi.c',
         'source/lib/netrc.c',
@@ -192,11 +198,13 @@
         'source/lib/pipeline.c',
         'source/lib/pop3.c',
         'source/lib/progress.c',
-        'source/lib/rawstr.c',
+        'source/lib/rand.c',
         'source/lib/rtsp.c',
         'source/lib/security.c',
         'source/lib/select.c',
         'source/lib/sendf.c',
+        'source/lib/setopt.c',
+        'source/lib/sha256.c',
         'source/lib/share.c',
         'source/lib/slist.c',
         'source/lib/smb.c',
@@ -207,8 +215,8 @@
         'source/lib/speedcheck.c',
         'source/lib/splay.c',
         'source/lib/ssh.c',
+        'source/lib/strcase.c',
         'source/lib/strdup.c',
-        'source/lib/strequal.c',
         'source/lib/strerror.c',
         'source/lib/strtok.c',
         'source/lib/strtoofft.c',

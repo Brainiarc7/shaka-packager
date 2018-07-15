@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef MEDIA_FORMATS_WEBM_WEBM_AUDIO_CLIENT_H_
-#define MEDIA_FORMATS_WEBM_WEBM_AUDIO_CLIENT_H_
+#ifndef PACKAGER_MEDIA_FORMATS_WEBM_WEBM_AUDIO_CLIENT_H_
+#define PACKAGER_MEDIA_FORMATS_WEBM_WEBM_AUDIO_CLIENT_H_
 
 #include <memory>
 #include <string>
@@ -37,10 +37,10 @@ class WebMAudioClient : public WebMParserClient {
   ///        value of 0 is used.
   /// @param language indicates the language for the track.
   /// @param is_encrypted indicates whether the stream is encrypted.
-  /// @return An AudioStreamInfo scoped_refptr if successful.
-  /// @return An empty scoped_refptr if there was unexpected values in the
+  /// @return An AudioStreamInfo if successful.
+  /// @return An empty pointer if there was unexpected values in the
   ///         provided parameters or audio track element fields.
-  scoped_refptr<AudioStreamInfo> GetAudioStreamInfo(
+  std::shared_ptr<AudioStreamInfo> GetAudioStreamInfo(
       int64_t track_num,
       const std::string& codec_id,
       const std::vector<uint8_t>& codec_private,
@@ -64,4 +64,4 @@ class WebMAudioClient : public WebMParserClient {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_FORMATS_WEBM_WEBM_AUDIO_CLIENT_H_
+#endif  // PACKAGER_MEDIA_FORMATS_WEBM_WEBM_AUDIO_CLIENT_H_

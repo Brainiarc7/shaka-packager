@@ -36,14 +36,14 @@ EsParserH264::~EsParserH264() {}
 void EsParserH264::Reset() {
   DVLOG(1) << "EsParserH264::Reset";
   h264_parser_.reset(new H264Parser());
-  last_video_decoder_config_ = scoped_refptr<StreamInfo>();
+  last_video_decoder_config_ = std::shared_ptr<StreamInfo>();
   decoder_config_check_pending_ = false;
   EsParserH26x::Reset();
 }
 
 bool EsParserH264::ProcessNalu(const Nalu& nalu,
-                               bool* is_key_frame,
-                               int* pps_id_for_access_unit) {
+                               VideoSliceInfo* video_slice_info) {
+  video_slice_info->valid = false;
   switch (nalu.type()) {
     case Nalu::H264_AUD: {
       DVLOG(LOG_LEVEL_ES) << "Nalu: AUD";
@@ -71,7 +71,7 @@ bool EsParserH264::ProcessNalu(const Nalu& nalu,
     }
     case Nalu::H264_IDRSlice:
     case Nalu::H264_NonIDRSlice: {
-      *is_key_frame = (nalu.type() == Nalu::H264_IDRSlice);
+      const bool is_key_frame = (nalu.type() == Nalu::H264_IDRSlice);
       DVLOG(LOG_LEVEL_ES) << "Nalu: slice IDR=" << is_key_frame;
       H264SliceHeader shdr;
       if (h264_parser_->ParseSliceHeader(nalu, &shdr) != H264Parser::kOk) {
@@ -80,7 +80,10 @@ bool EsParserH264::ProcessNalu(const Nalu& nalu,
         if (last_video_decoder_config_)
           return false;
       } else {
-        *pps_id_for_access_unit = shdr.pic_parameter_set_id;
+        video_slice_info->valid = true;
+        video_slice_info->is_key_frame = is_key_frame;
+        video_slice_info->frame_num = shdr.frame_num;
+        video_slice_info->pps_id = shdr.pic_parameter_set_id;
       }
       break;
     }
@@ -143,15 +146,21 @@ bool EsParserH264::UpdateVideoDecoderConfig(int pps_id) {
     return false;
   }
 
-  last_video_decoder_config_ = scoped_refptr<StreamInfo>(new VideoStreamInfo(
-      pid(), kMpeg2Timescale, kInfiniteDuration, kCodecH264,
-      AVCDecoderConfigurationRecord::GetCodecString(decoder_config_record[1],
-                                                    decoder_config_record[2],
-                                                    decoder_config_record[3]),
+  const uint8_t nalu_length_size =
+      H26xByteToUnitStreamConverter::kUnitStreamNaluLengthSize;
+  const H26xStreamFormat stream_format = stream_converter()->stream_format();
+  const FourCC codec_fourcc =
+      stream_format == H26xStreamFormat::kNalUnitStreamWithParameterSetNalus
+          ? FOURCC_avc3
+          : FOURCC_avc1;
+  last_video_decoder_config_ = std::make_shared<VideoStreamInfo>(
+      pid(), kMpeg2Timescale, kInfiniteDuration, kCodecH264, stream_format,
+      AVCDecoderConfigurationRecord::GetCodecString(
+          codec_fourcc, decoder_config_record[1], decoder_config_record[2],
+          decoder_config_record[3]),
       decoder_config_record.data(), decoder_config_record.size(), coded_width,
-      coded_height, pixel_width, pixel_height, 0,
-      H264ByteToUnitStreamConverter::kUnitStreamNaluLengthSize, std::string(),
-      false));
+      coded_height, pixel_width, pixel_height, 0, nalu_length_size,
+      std::string(), false);
   DVLOG(1) << "Profile IDC: " << sps->profile_idc;
   DVLOG(1) << "Level IDC: " << sps->level_idc;
   DVLOG(1) << "log2_max_frame_num_minus4: " << sps->log2_max_frame_num_minus4;

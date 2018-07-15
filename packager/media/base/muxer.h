@@ -6,58 +6,31 @@
 //
 // Defines the muxer interface.
 
-#ifndef MEDIA_BASE_MUXER_H_
-#define MEDIA_BASE_MUXER_H_
+#ifndef PACKAGER_MEDIA_BASE_MUXER_H_
+#define PACKAGER_MEDIA_BASE_MUXER_H_
 
 #include <memory>
 #include <vector>
 
-#include "packager/base/memory/ref_counted.h"
 #include "packager/base/time/clock.h"
-#include "packager/media/base/fourccs.h"
+#include "packager/media/base/media_handler.h"
 #include "packager/media/base/muxer_options.h"
-#include "packager/media/base/status.h"
 #include "packager/media/event/muxer_listener.h"
 #include "packager/media/event/progress_listener.h"
+#include "packager/status.h"
 
 namespace shaka {
 namespace media {
 
-class KeySource;
 class MediaSample;
-class MediaStream;
 
 /// Muxer is responsible for taking elementary stream samples and producing
 /// media containers. An optional KeySource can be provided to Muxer
 /// to generate encrypted outputs.
-class Muxer {
+class Muxer : public MediaHandler {
  public:
   explicit Muxer(const MuxerOptions& options);
   virtual ~Muxer();
-
-  /// Set encryption key source.
-  /// @param encryption_key_source points to the encryption key source. The
-  ///        caller retains ownership, and should not be NULL.
-  /// @param max_sd_pixels specifies the threshold to determine whether a video
-  ///        track should be considered as SD or HD. If the track has more
-  ///        pixels per frame than max_sd_pixels, it is HD, SD otherwise.
-  /// @param clear_lead_in_seconds specifies clear lead duration in seconds.
-  /// @param crypto_period_duration_in_seconds specifies crypto period duration
-  ///        in seconds. A positive value means key rotation is enabled, the
-  ///        key source must support key rotation in this case.
-  /// @param protection_scheme specifies the protection scheme: 'cenc', 'cens',
-  ///        'cbc1', 'cbcs'.
-  void SetKeySource(KeySource* encryption_key_source,
-                    uint32_t max_sd_pixels,
-                    double clear_lead_in_seconds,
-                    double crypto_period_duration_in_seconds,
-                    FourCC protection_scheme);
-
-  /// Add video/audio stream.
-  void AddStream(MediaStream* stream);
-
-  /// Drive the remuxing from muxer side (pull).
-  Status Run();
 
   /// Cancel a muxing job in progress. Will cause @a Run to exit with an error
   /// status of type CANCELLED.
@@ -71,7 +44,9 @@ class Muxer {
   /// @param progress_listener should not be NULL.
   void SetProgressListener(std::unique_ptr<ProgressListener> progress_listener);
 
-  const std::vector<MediaStream*>& streams() const { return streams_; }
+  const std::vector<std::shared_ptr<const StreamInfo>>& streams() const {
+    return streams_;
+  }
 
   /// Inject clock, mainly used for testing.
   /// The injected clock will be used to generate the creation time-stamp and
@@ -84,56 +59,62 @@ class Muxer {
   }
 
  protected:
+  /// @name MediaHandler implementation overrides.
+  /// @{
+  Status InitializeInternal() override { return Status::OK; }
+  Status Process(std::unique_ptr<StreamData> stream_data) override;
+  Status OnFlushRequest(size_t input_stream_index) override;
+  /// @}
+
   const MuxerOptions& options() const { return options_; }
-  KeySource* encryption_key_source() {
-    return encryption_key_source_;
-  }
-  uint32_t max_sd_pixels() const { return max_sd_pixels_; }
-  double clear_lead_in_seconds() const { return clear_lead_in_seconds_; }
-  double crypto_period_duration_in_seconds() const {
-    return crypto_period_duration_in_seconds_;
-  }
   MuxerListener* muxer_listener() { return muxer_listener_.get(); }
   ProgressListener* progress_listener() { return progress_listener_.get(); }
   base::Clock* clock() { return clock_; }
-  FourCC protection_scheme() const { return protection_scheme_; }
 
  private:
-  friend class MediaStream;  // Needed to access AddSample.
+  Muxer(const Muxer&) = delete;
+  Muxer& operator=(const Muxer&) = delete;
 
-  // Add new media sample.
-  Status AddSample(const MediaStream* stream,
-                   scoped_refptr<MediaSample> sample);
-
-  // Initialize the muxer.
-  virtual Status Initialize() = 0;
+  // Initialize the muxer. InitializeMuxer may be called multiple times with
+  // |options()| updated between calls, which is used to support separate file
+  // per Representation per Period for Ad Insertion.
+  virtual Status InitializeMuxer() = 0;
 
   // Final clean up.
   virtual Status Finalize() = 0;
 
-  // AddSample implementation.
-  virtual Status DoAddSample(const MediaStream* stream,
-                             scoped_refptr<MediaSample> sample) = 0;
+  // Add a new sample.
+  virtual Status AddSample(
+      size_t stream_id,
+      const MediaSample& sample) = 0;
+
+  // Finalize the segment or subsegment.
+  virtual Status FinalizeSegment(
+      size_t stream_id,
+      const SegmentInfo& segment_info) = 0;
+
+  // Re-initialize Muxer. Could be called on StreamInfo or CueEvent.
+  // |timestamp| may be used to set the output file name.
+  Status ReinitializeMuxer(int64_t timestamp);
 
   MuxerOptions options_;
-  bool initialized_;
-  std::vector<MediaStream*> streams_;
-  KeySource* encryption_key_source_;
-  uint32_t max_sd_pixels_;
-  double clear_lead_in_seconds_;
-  double crypto_period_duration_in_seconds_;
-  FourCC protection_scheme_;
-  bool cancelled_;
+  std::vector<std::shared_ptr<const StreamInfo>> streams_;
+  std::vector<uint8_t> current_key_id_;
+  bool encryption_started_ = false;
+  bool cancelled_ = false;
 
   std::unique_ptr<MuxerListener> muxer_listener_;
   std::unique_ptr<ProgressListener> progress_listener_;
   // An external injected clock, can be NULL.
-  base::Clock* clock_;
+  base::Clock* clock_ = nullptr;
 
-  DISALLOW_COPY_AND_ASSIGN(Muxer);
+  // In VOD single segment case with Ad Cues, |output_file_name| is allowed to
+  // be a template. In this case, there will be NumAdCues + 1 files generated.
+  std::string output_file_template_;
+  size_t output_file_index_ = 0;
 };
 
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_BASE_MUXER_H_
+#endif  // PACKAGER_MEDIA_BASE_MUXER_H_

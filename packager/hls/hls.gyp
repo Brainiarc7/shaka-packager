@@ -5,9 +5,9 @@
 # https://developers.google.com/open-source/licenses/bsd
 
 {
-  'includes': [
-    '../common.gypi',
-  ],
+  'variables': {
+    'shaka_code': 1,
+  },
   'targets': [
     {
       'target_name': 'hls_builder',
@@ -20,12 +20,16 @@
         'base/media_playlist.h',
         'base/simple_hls_notifier.cc',
         'base/simple_hls_notifier.h',
+        'base/tag.cc',
+        'base/tag.h',
+        'public/hls_params.h',
       ],
       'dependencies': [
         '../base/base.gyp:base',
+        '../file/file.gyp:file',
         '../media/base/media_base.gyp:media_base',
         '../media/base/media_base.gyp:widevine_pssh_data_proto',
-        '../media/file/file.gyp:file',
+        '../mpd/mpd.gyp:manifest_base',
         '../mpd/mpd.gyp:media_info_proto',
       ],
     },

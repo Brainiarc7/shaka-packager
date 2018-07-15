@@ -5,9 +5,9 @@
 # https://developers.google.com/open-source/licenses/bsd
 
 {
-  'includes': [
-    '../../../common.gypi',
-  ],
+  'variables': {
+    'shaka_code': 1,
+  },
   'targets': [
     {
       'target_name': 'mp4',
@@ -26,12 +26,9 @@
         'composition_offset_iterator.h',
         'decoding_time_iterator.cc',
         'decoding_time_iterator.h',
-        'encrypting_fragmenter.cc',
-        'encrypting_fragmenter.h',
         'fragmenter.cc',
         'fragmenter.h',
-        'key_rotation_fragmenter.cc',
-        'key_rotation_fragmenter.h',
+        'key_frame_info.h',
         'mp4_media_parser.cc',
         'mp4_media_parser.h',
         'mp4_muxer.cc',
@@ -68,9 +65,9 @@
         'track_run_iterator_unittest.cc',
       ],
       'dependencies': [
+        '../../../file/file.gyp:file',
         '../../../testing/gtest.gyp:gtest',
         '../../../testing/gmock.gyp:gmock',
-        '../../file/file.gyp:file',
         '../../test/media_test.gyp:media_test_support',
         'mp4',
       ]

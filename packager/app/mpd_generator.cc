@@ -4,6 +4,8 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
+#include <iostream>
+
 #include "packager/app/mpd_generator_flags.h"
 #include "packager/app/vlog_flags.h"
 #include "packager/base/at_exit.h"
@@ -12,6 +14,7 @@
 #include "packager/base/strings/string_split.h"
 #include "packager/base/strings/stringprintf.h"
 #include "packager/mpd/util/mpd_writer.h"
+#include "packager/tools/license_notice.h"
 #include "packager/version/version.h"
 
 #if defined(OS_WIN)
@@ -19,6 +22,11 @@
 #include <functional>
 #include <locale>
 #endif  // defined(OS_WIN)
+
+DEFINE_bool(licenses, false, "Dump licenses.");
+DEFINE_string(test_packager_version,
+              "",
+              "Packager version for testing. Should be used for testing only.");
 
 namespace shaka {
 namespace {
@@ -73,9 +81,9 @@ ExitStatus RunMpdGenerator() {
   for (Iterator it = base_urls.begin(); it != base_urls.end(); ++it)
     mpd_writer.AddBaseUrl(*it);
 
-  for (Iterator it = input_files.begin(); it != input_files.end(); ++it) {
-    if (!mpd_writer.AddFile(it->c_str(), FLAGS_output)) {
-      LOG(WARNING) << "MpdWriter failed to read " << *it << ", skipping.";
+  for (const std::string& file : input_files) {
+    if (!mpd_writer.AddFile(file)) {
+      LOG(WARNING) << "MpdWriter failed to read " << file << ", skipping.";
     }
   }
 
@@ -91,18 +99,29 @@ int MpdMain(int argc, char** argv) {
   base::AtExitManager exit;
   // Needed to enable VLOG/DVLOG through --vmodule or --v.
   base::CommandLine::Init(argc, argv);
-  CHECK(logging::InitLogging(logging::LoggingSettings()));
 
+  // Set up logging.
+  logging::LoggingSettings log_settings;
+  log_settings.logging_dest = logging::LOG_TO_SYSTEM_DEBUG_LOG;
+  CHECK(logging::InitLogging(log_settings));
+
+  google::SetVersionString(GetPackagerVersion());
   google::SetUsageMessage(base::StringPrintf(kUsage, argv[0]));
   google::ParseCommandLineFlags(&argc, &argv, true);
+  if (FLAGS_licenses) {
+    for (const char* line : kLicenseNotice)
+      std::cout << line << std::endl;
+    return kSuccess;
+  }
 
   ExitStatus status = CheckRequiredFlags();
   if (status != kSuccess) {
-    const std::string version_string = base::StringPrintf(
-        "mpd_generator version %s", GetPackagerVersion().c_str());
-    google::ShowUsageWithFlags(version_string.c_str());
+    google::ShowUsageWithFlags("Usage");
     return status;
   }
+
+  if (!FLAGS_test_packager_version.empty())
+    SetPackagerVersionForTesting(FLAGS_test_packager_version);
 
   return RunMpdGenerator();
 }

@@ -4,14 +4,14 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_FORMATS_WEBM_MKV_WRITER_H_
-#define MEDIA_FORMATS_WEBM_MKV_WRITER_H_
+#ifndef PACKAGER_MEDIA_FORMATS_WEBM_MKV_WRITER_H_
+#define PACKAGER_MEDIA_FORMATS_WEBM_MKV_WRITER_H_
 
 #include <memory>
 #include <string>
 
-#include "packager/media/base/status.h"
-#include "packager/media/file/file_closer.h"
+#include "packager/file/file_closer.h"
+#include "packager/status.h"
 #include "packager/third_party/libwebm/src/mkvmuxer.hpp"
 
 namespace shaka {
@@ -72,4 +72,4 @@ class MkvWriter : public mkvmuxer::IMkvWriter {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_FORMATS_WEBM_MKV_WRITER_H_
+#endif  // PACKAGER_MEDIA_FORMATS_WEBM_MKV_WRITER_H_

@@ -4,6 +4,8 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
+#include <gmock/gmock.h>
+#include <google/protobuf/util/message_differencer.h>
 #include <gtest/gtest.h>
 
 #include "packager/base/files/file_path.h"
@@ -17,52 +19,57 @@
 namespace shaka {
 
 using ::testing::_;
+using ::testing::Eq;
+using ::testing::Ref;
 using ::testing::Return;
+using ::testing::ReturnRef;
 using ::testing::StrEq;
 
 namespace {
-const char kValidMediaInfo[] =
-    "video_info {\n"
-    "  codec: 'avc1'\n"
-    "  width: 1280\n"
-    "  height: 720\n"
-    "  time_scale: 10\n"
-    "  frame_duration: 10\n"
-    "  pixel_width: 1\n"
-    "  pixel_height: 1\n"
-    "}\n"
-    "container_type: 1\n";
-const uint32_t kDefaultAdaptationSetId = 0u;
+const uint32_t kDefaultPeriodId = 0u;
+const double kDefaultPeriodStartTime = 0.0;
+const uint32_t kDefaultTimeScale = 10;
+const bool kContentProtectionInAdaptationSet = true;
+
+MATCHER_P(EqualsProto, message, "") {
+  return ::google::protobuf::util::MessageDifferencer::Equals(arg, message);
+}
+
 }  // namespace
 
-class SimpleMpdNotifierTest
-    : public ::testing::TestWithParam<MpdBuilder::MpdType> {
+class SimpleMpdNotifierTest : public ::testing::Test {
  protected:
   SimpleMpdNotifierTest()
-      : default_mock_adaptation_set_(
-            new MockAdaptationSet(kDefaultAdaptationSetId)) {}
+      : default_mock_period_(
+            new MockPeriod(kDefaultPeriodId, kDefaultPeriodStartTime)),
+        default_mock_adaptation_set_(new MockAdaptationSet()) {}
 
   void SetUp() override {
     ASSERT_TRUE(base::CreateTemporaryFile(&temp_file_path_));
-    output_path_ = temp_file_path_.AsUTF8Unsafe();
+    empty_mpd_option_.mpd_params.mpd_output = temp_file_path_.AsUTF8Unsafe();
+
+    // Three valid media info. The actual data does not matter.
+    const char kValidMediaInfo[] =
+        "video_info {\n"
+        "  codec: 'avc1'\n"
+        "  width: 1280\n"
+        "  height: 720\n"
+        "  time_scale: 10\n"
+        "  frame_duration: 10\n"
+        "  pixel_width: 1\n"
+        "  pixel_height: 1\n"
+        "}\n"
+        "container_type: 1\n";
+    valid_media_info1_ = ConvertToMediaInfo(kValidMediaInfo);
+    valid_media_info1_.set_reference_time_scale(kDefaultTimeScale);
+    valid_media_info2_ = valid_media_info1_;
+    valid_media_info2_.mutable_video_info()->set_width(960);
+    valid_media_info3_ = valid_media_info1_;
+    valid_media_info3_.mutable_video_info()->set_width(480);
   }
 
   void TearDown() override {
     base::DeleteFile(temp_file_path_, false /* non recursive, just 1 file */);
-  }
-
-  std::unique_ptr<MockMpdBuilder> StaticMpdBuilderMock() {
-    return std::unique_ptr<MockMpdBuilder>(
-        new MockMpdBuilder(MpdBuilder::kStatic));
-  }
-
-  std::unique_ptr<MockMpdBuilder> DynamicMpdBuilderMock() {
-    return std::unique_ptr<MockMpdBuilder>(
-        new MockMpdBuilder(MpdBuilder::kDynamic));
-  }
-
-  MpdBuilder::MpdType GetMpdBuilderType(const SimpleMpdNotifier& notifier) {
-    return notifier.MpdBuilderForTesting()->type();
   }
 
   void SetMpdBuilder(SimpleMpdNotifier* notifier,
@@ -70,48 +77,41 @@ class SimpleMpdNotifierTest
     notifier->SetMpdBuilderForTesting(std::move(mpd_builder));
   }
 
-  // Use output_path_ for specifying the MPD output path so that
+ protected:
+  // Empty mpd options except with output path specified, so that
   // WriteMpdToFile() doesn't crash.
-  std::string output_path_;
-  const MpdOptions empty_mpd_option_;
+  MpdOptions empty_mpd_option_;
   const std::vector<std::string> empty_base_urls_;
 
-  // Default AdaptationSet mock.
+  // Default mocks that can be used for the tests.
+  std::unique_ptr<MockPeriod> default_mock_period_;
   std::unique_ptr<MockAdaptationSet> default_mock_adaptation_set_;
+
+  // Three valid media info. The actual content does not matter.
+  MediaInfo valid_media_info1_;
+  MediaInfo valid_media_info2_;
+  MediaInfo valid_media_info3_;
 
  private:
   base::FilePath temp_file_path_;
 };
 
-// Verify that it creates the correct MpdBuilder type using DashProfile passed
-// to the constructor.
-TEST_F(SimpleMpdNotifierTest, CreateCorrectMpdBuilderType) {
-  SimpleMpdNotifier on_demand_notifier(kOnDemandProfile, empty_mpd_option_,
-                                       empty_base_urls_, output_path_);
-  EXPECT_TRUE(on_demand_notifier.Init());
-  EXPECT_EQ(MpdBuilder::kStatic,
-            GetMpdBuilderType(on_demand_notifier));
-  SimpleMpdNotifier live_notifier(kLiveProfile, empty_mpd_option_,
-                                  empty_base_urls_, output_path_);
-  EXPECT_TRUE(live_notifier.Init());
-  EXPECT_EQ(MpdBuilder::kDynamic, GetMpdBuilderType(live_notifier));
-}
-
 // Verify NotifyNewContainer() works as expected for VOD.
-TEST_P(SimpleMpdNotifierTest, NotifyNewContainer) {
-  SimpleMpdNotifier notifier(kOnDemandProfile, empty_mpd_option_,
-                             empty_base_urls_, output_path_);
+TEST_F(SimpleMpdNotifierTest, NotifyNewContainer) {
+  SimpleMpdNotifier notifier(empty_mpd_option_);
 
   const uint32_t kRepresentationId = 1u;
-  const MpdBuilder::MpdType mpd_type = GetParam();
-  std::unique_ptr<MockMpdBuilder> mock_mpd_builder(
-      new MockMpdBuilder(mpd_type));
+  std::unique_ptr<MockMpdBuilder> mock_mpd_builder(new MockMpdBuilder());
   std::unique_ptr<MockRepresentation> mock_representation(
       new MockRepresentation(kRepresentationId));
 
-  EXPECT_CALL(*mock_mpd_builder, AddAdaptationSet(_))
+  EXPECT_CALL(*mock_mpd_builder, GetOrCreatePeriod(_))
+      .WillOnce(Return(default_mock_period_.get()));
+  EXPECT_CALL(*default_mock_period_,
+              GetOrCreateAdaptationSet(EqualsProto(valid_media_info1_), _))
       .WillOnce(Return(default_mock_adaptation_set_.get()));
-  EXPECT_CALL(*default_mock_adaptation_set_, AddRepresentation(_))
+  EXPECT_CALL(*default_mock_adaptation_set_,
+              AddRepresentation(EqualsProto(valid_media_info1_)))
       .WillOnce(Return(mock_representation.get()));
 
   // This is for the Flush() below but adding expectation here because the next
@@ -120,61 +120,29 @@ TEST_P(SimpleMpdNotifierTest, NotifyNewContainer) {
 
   uint32_t unused_container_id;
   SetMpdBuilder(&notifier, std::move(mock_mpd_builder));
-  EXPECT_TRUE(notifier.NotifyNewContainer(ConvertToMediaInfo(kValidMediaInfo),
-                                          &unused_container_id));
+  EXPECT_TRUE(
+      notifier.NotifyNewContainer(valid_media_info1_, &unused_container_id));
   EXPECT_TRUE(notifier.Flush());
 }
 
-// Verify NotifySampleDuration() works as expected for Live.
-TEST_F(SimpleMpdNotifierTest, LiveNotifySampleDuration) {
-  SimpleMpdNotifier notifier(kLiveProfile, empty_mpd_option_, empty_base_urls_,
-                             output_path_);
+TEST_F(SimpleMpdNotifierTest, NotifySampleDuration) {
+  SimpleMpdNotifier notifier(empty_mpd_option_);
 
   const uint32_t kRepresentationId = 8u;
-  std::unique_ptr<MockMpdBuilder> mock_mpd_builder(DynamicMpdBuilderMock());
+  std::unique_ptr<MockMpdBuilder> mock_mpd_builder(new MockMpdBuilder());
   std::unique_ptr<MockRepresentation> mock_representation(
       new MockRepresentation(kRepresentationId));
 
-  EXPECT_CALL(*mock_mpd_builder, AddAdaptationSet(_))
+  EXPECT_CALL(*mock_mpd_builder, GetOrCreatePeriod(_))
+      .WillOnce(Return(default_mock_period_.get()));
+  EXPECT_CALL(*default_mock_period_, GetOrCreateAdaptationSet(_, _))
       .WillOnce(Return(default_mock_adaptation_set_.get()));
   EXPECT_CALL(*default_mock_adaptation_set_, AddRepresentation(_))
       .WillOnce(Return(mock_representation.get()));
 
   uint32_t container_id;
   SetMpdBuilder(&notifier, std::move(mock_mpd_builder));
-  EXPECT_TRUE(notifier.NotifyNewContainer(ConvertToMediaInfo(kValidMediaInfo),
-                                          &container_id));
-  EXPECT_EQ(kRepresentationId, container_id);
-
-  const uint32_t kSampleDuration = 100;
-  EXPECT_CALL(*mock_representation, SetSampleDuration(kSampleDuration));
-  EXPECT_TRUE(
-      notifier.NotifySampleDuration(kRepresentationId, kSampleDuration));
-}
-
-// Verify that NotifySampleDuration works for OnDemand profile.
-// TODO(rkuroiwa): SimpleMpdNotifier returns a container ID but does not
-// register it to its map for VOD. Must fix and enable this test.
-// This test can be also parmeterized just like NotifyNewContainer() test, once
-// it is fixed.
-TEST_F(SimpleMpdNotifierTest, OnDemandNotifySampleDuration) {
-  SimpleMpdNotifier notifier(kOnDemandProfile, empty_mpd_option_,
-                             empty_base_urls_, output_path_);
-
-  const uint32_t kRepresentationId = 14u;
-  std::unique_ptr<MockMpdBuilder> mock_mpd_builder(StaticMpdBuilderMock());
-  std::unique_ptr<MockRepresentation> mock_representation(
-      new MockRepresentation(kRepresentationId));
-
-  EXPECT_CALL(*mock_mpd_builder, AddAdaptationSet(_))
-      .WillOnce(Return(default_mock_adaptation_set_.get()));
-  EXPECT_CALL(*default_mock_adaptation_set_, AddRepresentation(_))
-      .WillOnce(Return(mock_representation.get()));
-
-  uint32_t container_id;
-  SetMpdBuilder(&notifier, std::move(mock_mpd_builder));
-  EXPECT_TRUE(notifier.NotifyNewContainer(ConvertToMediaInfo(kValidMediaInfo),
-                                          &container_id));
+  EXPECT_TRUE(notifier.NotifyNewContainer(valid_media_info1_, &container_id));
   EXPECT_EQ(kRepresentationId, container_id);
 
   const uint32_t kSampleDuration = 100;
@@ -189,35 +157,32 @@ TEST_F(SimpleMpdNotifierTest, OnDemandNotifySampleDuration) {
 // This issue identified a bug where using SimpleMpdNotifier with multiple
 // threads causes a deadlock.
 TEST_F(SimpleMpdNotifierTest, NotifyNewContainerAndSampleDurationNoMock) {
-  SimpleMpdNotifier notifier(kOnDemandProfile, empty_mpd_option_,
-                             empty_base_urls_, output_path_);
+  SimpleMpdNotifier notifier(empty_mpd_option_);
   uint32_t container_id;
-  EXPECT_TRUE(notifier.NotifyNewContainer(ConvertToMediaInfo(kValidMediaInfo),
-                                          &container_id));
+  EXPECT_TRUE(notifier.NotifyNewContainer(valid_media_info1_, &container_id));
   const uint32_t kAnySampleDuration = 1000;
-  EXPECT_TRUE(notifier.NotifySampleDuration(container_id,  kAnySampleDuration));
+  EXPECT_TRUE(notifier.NotifySampleDuration(container_id, kAnySampleDuration));
   EXPECT_TRUE(notifier.Flush());
 }
 
-// Verify that NotifyNewSegment() for live works.
-TEST_F(SimpleMpdNotifierTest, LiveNotifyNewSegment) {
-  SimpleMpdNotifier notifier(kLiveProfile, empty_mpd_option_, empty_base_urls_,
-                             output_path_);
+TEST_F(SimpleMpdNotifierTest, NotifyNewSegment) {
+  SimpleMpdNotifier notifier(empty_mpd_option_);
 
   const uint32_t kRepresentationId = 447834u;
-  std::unique_ptr<MockMpdBuilder> mock_mpd_builder(DynamicMpdBuilderMock());
+  std::unique_ptr<MockMpdBuilder> mock_mpd_builder(new MockMpdBuilder());
   std::unique_ptr<MockRepresentation> mock_representation(
       new MockRepresentation(kRepresentationId));
 
-  EXPECT_CALL(*mock_mpd_builder, AddAdaptationSet(_))
+  EXPECT_CALL(*mock_mpd_builder, GetOrCreatePeriod(_))
+      .WillOnce(Return(default_mock_period_.get()));
+  EXPECT_CALL(*default_mock_period_, GetOrCreateAdaptationSet(_, _))
       .WillOnce(Return(default_mock_adaptation_set_.get()));
   EXPECT_CALL(*default_mock_adaptation_set_, AddRepresentation(_))
       .WillOnce(Return(mock_representation.get()));
 
   uint32_t container_id;
   SetMpdBuilder(&notifier, std::move(mock_mpd_builder));
-  EXPECT_TRUE(notifier.NotifyNewContainer(ConvertToMediaInfo(kValidMediaInfo),
-                                          &container_id));
+  EXPECT_TRUE(notifier.NotifyNewContainer(valid_media_info1_, &container_id));
   EXPECT_EQ(kRepresentationId, container_id);
 
   const uint64_t kStartTime = 0u;
@@ -230,68 +195,124 @@ TEST_F(SimpleMpdNotifierTest, LiveNotifyNewSegment) {
                                         kSegmentDuration, kSegmentSize));
 }
 
-// Verify AddContentProtectionElement() works. Profile doesn't matter.
-TEST_F(SimpleMpdNotifierTest, AddContentProtectionElement) {
-  SimpleMpdNotifier notifier(kOnDemandProfile, empty_mpd_option_,
-                             empty_base_urls_, output_path_);
+TEST_F(SimpleMpdNotifierTest, NotifyCueEvent) {
+  SimpleMpdNotifier notifier(empty_mpd_option_);
 
-  const uint32_t kRepresentationId = 0u;
-  std::unique_ptr<MockMpdBuilder> mock_mpd_builder(StaticMpdBuilderMock());
+  const uint32_t kRepresentationId = 123u;
+  std::unique_ptr<MockMpdBuilder> mock_mpd_builder(new MockMpdBuilder());
+  MockMpdBuilder* mock_mpd_builder_ptr = mock_mpd_builder.get();
+
+  std::unique_ptr<MockPeriod> mock_period(
+      new MockPeriod(kDefaultPeriodId, kDefaultPeriodStartTime));
+  std::unique_ptr<MockAdaptationSet> mock_adaptation_set(
+      new MockAdaptationSet());
   std::unique_ptr<MockRepresentation> mock_representation(
       new MockRepresentation(kRepresentationId));
 
-  EXPECT_CALL(*mock_mpd_builder, AddAdaptationSet(_))
-      .WillOnce(Return(default_mock_adaptation_set_.get()));
-  EXPECT_CALL(*default_mock_adaptation_set_, AddRepresentation(_))
+  EXPECT_CALL(*mock_mpd_builder, GetOrCreatePeriod(Eq(0.0)))
+      .WillOnce(Return(mock_period.get()));
+  EXPECT_CALL(*mock_period,
+              GetOrCreateAdaptationSet(EqualsProto(valid_media_info1_), _))
+      .WillOnce(Return(mock_adaptation_set.get()));
+  EXPECT_CALL(*mock_adaptation_set, AddRepresentation(_))
       .WillOnce(Return(mock_representation.get()));
 
   uint32_t container_id;
   SetMpdBuilder(&notifier, std::move(mock_mpd_builder));
-  EXPECT_TRUE(notifier.NotifyNewContainer(ConvertToMediaInfo(kValidMediaInfo),
-                                          &container_id));
+  EXPECT_TRUE(notifier.NotifyNewContainer(valid_media_info1_, &container_id));
   EXPECT_EQ(kRepresentationId, container_id);
 
-  ContentProtectionElement element;
-  EXPECT_CALL(*mock_representation, AddContentProtectionElement(_));
-  EXPECT_TRUE(notifier.AddContentProtectionElement(kRepresentationId, element));
+  const uint32_t kAnotherPeriodId = 2u;
+  const double kArbitraryPeriodStartTime = 100;  // Value does not matter.
+  std::unique_ptr<MockPeriod> mock_period2(
+      new MockPeriod(kAnotherPeriodId, kArbitraryPeriodStartTime));
+  std::unique_ptr<MockAdaptationSet> mock_adaptation_set2(
+      new MockAdaptationSet());
+  std::unique_ptr<MockRepresentation> mock_representation2(
+      new MockRepresentation(kRepresentationId));
+
+  const uint64_t kCueEventTimestamp = 1000;
+  EXPECT_CALL(*mock_representation, GetMediaInfo())
+      .WillOnce(ReturnRef(valid_media_info1_));
+  EXPECT_CALL(*mock_mpd_builder_ptr,
+              GetOrCreatePeriod(Eq(kCueEventTimestamp / kDefaultTimeScale)))
+      .WillOnce(Return(mock_period2.get()));
+  EXPECT_CALL(*mock_period2,
+              GetOrCreateAdaptationSet(EqualsProto(valid_media_info1_), _))
+      .WillOnce(Return(mock_adaptation_set2.get()));
+  EXPECT_CALL(*mock_adaptation_set2,
+              CopyRepresentation(Ref(*mock_representation)))
+      .WillOnce(Return(mock_representation2.get()));
+  EXPECT_TRUE(notifier.NotifyCueEvent(container_id, kCueEventTimestamp));
 }
 
-TEST_P(SimpleMpdNotifierTest, UpdateEncryption) {
-  const char kProtectedContent[] =
-      "video_info {\n"
-      "  codec: 'avc1'\n"
-      "  width: 640\n"
-      "  height: 360\n"
-      "  time_scale: 10\n"
-      "  frame_duration: 10\n"
-      "  pixel_width: 1\n"
-      "  pixel_height: 1\n"
-      "}\n"
-      "protected_content {\n"
-      "  content_protection_entry {\n"
-      "    uuid: 'myuuid'\n"
-      "    name_version: 'MyContentProtection version 1'\n"
-      "    pssh: 'psshsomethingelse'\n"
-      "  }\n"
-      "  default_key_id: '_default_key_id_'\n"
-      "}\n"
-      "container_type: 1\n";
-  SimpleMpdNotifier notifier(kLiveProfile, empty_mpd_option_, empty_base_urls_,
-                             output_path_);
+TEST_F(SimpleMpdNotifierTest,
+       ContentProtectionInAdaptationSetUpdateEncryption) {
+  MpdOptions mpd_options = empty_mpd_option_;
+  mpd_options.mpd_params.generate_dash_if_iop_compliant_mpd =
+      kContentProtectionInAdaptationSet;
+  SimpleMpdNotifier notifier(mpd_options);
+
   const uint32_t kRepresentationId = 447834u;
-  std::unique_ptr<MockMpdBuilder> mock_mpd_builder(DynamicMpdBuilderMock());
+  std::unique_ptr<MockMpdBuilder> mock_mpd_builder(new MockMpdBuilder());
   std::unique_ptr<MockRepresentation> mock_representation(
       new MockRepresentation(kRepresentationId));
 
-  EXPECT_CALL(*mock_mpd_builder, AddAdaptationSet(_))
+  EXPECT_CALL(*mock_mpd_builder, GetOrCreatePeriod(_))
+      .WillOnce(Return(default_mock_period_.get()));
+  EXPECT_CALL(
+      *default_mock_period_,
+      GetOrCreateAdaptationSet(_, Eq(kContentProtectionInAdaptationSet)))
       .WillOnce(Return(default_mock_adaptation_set_.get()));
   EXPECT_CALL(*default_mock_adaptation_set_, AddRepresentation(_))
       .WillOnce(Return(mock_representation.get()));
 
   uint32_t container_id;
   SetMpdBuilder(&notifier, std::move(mock_mpd_builder));
-  EXPECT_TRUE(notifier.NotifyNewContainer(ConvertToMediaInfo(kProtectedContent),
-                                          &container_id));
+  EXPECT_TRUE(notifier.NotifyNewContainer(valid_media_info1_, &container_id));
+
+  ::testing::Mock::VerifyAndClearExpectations(
+      default_mock_adaptation_set_.get());
+
+  // "psshsomethingelse" as uint8 array.
+  const uint8_t kBogusNewPssh[] = {0x70, 0x73, 0x73, 0x68, 0x73, 0x6f,
+                                   0x6d, 0x65, 0x74, 0x68, 0x69, 0x6e,
+                                   0x67, 0x65, 0x6c, 0x73, 0x65};
+  const std::vector<uint8_t> kBogusNewPsshVector(
+      kBogusNewPssh, kBogusNewPssh + arraysize(kBogusNewPssh));
+  const char kBogusNewPsshInBase64[] = "cHNzaHNvbWV0aGluZ2Vsc2U=";
+
+  EXPECT_CALL(*default_mock_adaptation_set_,
+              UpdateContentProtectionPssh(StrEq("myuuid"),
+                                          StrEq(kBogusNewPsshInBase64)));
+  EXPECT_TRUE(notifier.NotifyEncryptionUpdate(
+      container_id, "myuuid", std::vector<uint8_t>(), kBogusNewPsshVector));
+}
+
+TEST_F(SimpleMpdNotifierTest,
+       ContentProtectionNotInAdaptationSetUpdateEncryption) {
+  MpdOptions mpd_options = empty_mpd_option_;
+  mpd_options.mpd_params.generate_dash_if_iop_compliant_mpd =
+      !kContentProtectionInAdaptationSet;
+  SimpleMpdNotifier notifier(mpd_options);
+
+  const uint32_t kRepresentationId = 447834u;
+  std::unique_ptr<MockMpdBuilder> mock_mpd_builder(new MockMpdBuilder());
+  std::unique_ptr<MockRepresentation> mock_representation(
+      new MockRepresentation(kRepresentationId));
+
+  EXPECT_CALL(*mock_mpd_builder, GetOrCreatePeriod(_))
+      .WillOnce(Return(default_mock_period_.get()));
+  EXPECT_CALL(
+      *default_mock_period_,
+      GetOrCreateAdaptationSet(_, Eq(!kContentProtectionInAdaptationSet)))
+      .WillOnce(Return(default_mock_adaptation_set_.get()));
+  EXPECT_CALL(*default_mock_adaptation_set_, AddRepresentation(_))
+      .WillOnce(Return(mock_representation.get()));
+
+  uint32_t container_id;
+  SetMpdBuilder(&notifier, std::move(mock_mpd_builder));
+  EXPECT_TRUE(notifier.NotifyNewContainer(valid_media_info1_, &container_id));
 
   ::testing::Mock::VerifyAndClearExpectations(
       default_mock_adaptation_set_.get());
@@ -311,67 +332,13 @@ TEST_P(SimpleMpdNotifierTest, UpdateEncryption) {
       container_id, "myuuid", std::vector<uint8_t>(), kBogusNewPsshVector));
 }
 
-// Don't put different audio languages or codecs in the same AdaptationSet.
-TEST_P(SimpleMpdNotifierTest, SplitAdaptationSetsByLanguageAndCodec) {
-  // MP4, English
-  const char kAudioContent1[] =
-      "audio_info {\n"
-      "  codec: 'mp4a.40.2'\n"
-      "  sampling_frequency: 44100\n"
-      "  time_scale: 1200\n"
-      "  num_channels: 2\n"
-      "  language: 'eng'\n"
-      "}\n"
-      "reference_time_scale: 50\n"
-      "container_type: CONTAINER_MP4\n"
-      "media_duration_seconds: 10.5\n";
+// Test multiple media info with some belongs to the same AdaptationSets.
+TEST_F(SimpleMpdNotifierTest, MultipleMediaInfo) {
+  SimpleMpdNotifier notifier(empty_mpd_option_);
+  std::unique_ptr<MockMpdBuilder> mock_mpd_builder(new MockMpdBuilder());
 
-  // MP4, German
-  const char kAudioContent2[] =
-      "audio_info {\n"
-      "  codec: 'mp4a.40.2'\n"
-      "  sampling_frequency: 44100\n"
-      "  time_scale: 1200\n"
-      "  num_channels: 2\n"
-      "  language: 'ger'\n"
-      "}\n"
-      "reference_time_scale: 50\n"
-      "container_type: CONTAINER_MP4\n"
-      "media_duration_seconds: 10.5\n";
-
-  // WebM, German
-  const char kAudioContent3[] =
-      "audio_info {\n"
-      "  codec: 'vorbis'\n"
-      "  sampling_frequency: 44100\n"
-      "  time_scale: 1200\n"
-      "  num_channels: 2\n"
-      "  language: 'ger'\n"
-      "}\n"
-      "reference_time_scale: 50\n"
-      "container_type: CONTAINER_WEBM\n"
-      "media_duration_seconds: 10.5\n";
-
-  // WebM, German again
-  const char kAudioContent4[] =
-      "audio_info {\n"
-      "  codec: 'vorbis'\n"
-      "  sampling_frequency: 44100\n"
-      "  time_scale: 1200\n"
-      "  num_channels: 2\n"
-      "  language: 'ger'\n"
-      "}\n"
-      "reference_time_scale: 50\n"
-      "container_type: CONTAINER_WEBM\n"
-      "media_duration_seconds: 10.5\n";
-
-  SimpleMpdNotifier notifier(kOnDemandProfile, empty_mpd_option_,
-                             empty_base_urls_, output_path_);
-  std::unique_ptr<MockMpdBuilder> mock_mpd_builder(StaticMpdBuilderMock());
-
-  std::unique_ptr<MockAdaptationSet> adaptation_set1(new MockAdaptationSet(1));
-  std::unique_ptr<MockAdaptationSet> adaptation_set2(new MockAdaptationSet(2));
-  std::unique_ptr<MockAdaptationSet> adaptation_set3(new MockAdaptationSet(3));
+  std::unique_ptr<MockAdaptationSet> adaptation_set1(new MockAdaptationSet());
+  std::unique_ptr<MockAdaptationSet> adaptation_set2(new MockAdaptationSet());
 
   std::unique_ptr<MockRepresentation> representation1(
       new MockRepresentation(1));
@@ -379,40 +346,41 @@ TEST_P(SimpleMpdNotifierTest, SplitAdaptationSetsByLanguageAndCodec) {
       new MockRepresentation(2));
   std::unique_ptr<MockRepresentation> representation3(
       new MockRepresentation(3));
-  std::unique_ptr<MockRepresentation> representation4(
-      new MockRepresentation(4));
 
-  // We expect three AdaptationSets.
-  EXPECT_CALL(*mock_mpd_builder, AddAdaptationSet(_))
-      .WillOnce(Return(adaptation_set1.get()))
-      .WillOnce(Return(adaptation_set2.get()))
-      .WillOnce(Return(adaptation_set3.get()));
-  // The first AdaptationSet should have Eng MP4, one Representation.
-  EXPECT_CALL(*adaptation_set1, AddRepresentation(_))
+  EXPECT_CALL(*mock_mpd_builder, GetOrCreatePeriod(_))
+      .Times(3)
+      .WillRepeatedly(Return(default_mock_period_.get()));
+
+  EXPECT_CALL(*default_mock_period_,
+              GetOrCreateAdaptationSet(EqualsProto(valid_media_info1_), _))
+      .WillOnce(Return(adaptation_set1.get()));
+  EXPECT_CALL(*adaptation_set1,
+              AddRepresentation(EqualsProto(valid_media_info1_)))
       .WillOnce(Return(representation1.get()));
-  // The second AdaptationSet should have Ger MP4, one Representation.
-  EXPECT_CALL(*adaptation_set2, AddRepresentation(_))
+  // Return the same adaptation set for |valid_media_info2_| and
+  // |valid_media_info3_|. This results in AddRepresentation to be called twice
+  // on |adaptation_set2|.
+  EXPECT_CALL(*default_mock_period_,
+              GetOrCreateAdaptationSet(EqualsProto(valid_media_info2_), _))
+      .WillOnce(Return(adaptation_set2.get()));
+  EXPECT_CALL(*adaptation_set2,
+              AddRepresentation(EqualsProto(valid_media_info2_)))
       .WillOnce(Return(representation2.get()));
-  // The third AdaptationSet should have Ger WebM, two Representations.
-  EXPECT_CALL(*adaptation_set3, AddRepresentation(_))
-      .WillOnce(Return(representation3.get()))
-      .WillOnce(Return(representation4.get()));
+  EXPECT_CALL(*default_mock_period_,
+              GetOrCreateAdaptationSet(EqualsProto(valid_media_info3_), _))
+      .WillOnce(Return(adaptation_set2.get()));
+  EXPECT_CALL(*adaptation_set2,
+              AddRepresentation(EqualsProto(valid_media_info3_)))
+      .WillOnce(Return(representation3.get()));
 
   uint32_t unused_container_id;
   SetMpdBuilder(&notifier, std::move(mock_mpd_builder));
-  EXPECT_TRUE(notifier.NotifyNewContainer(
-      ConvertToMediaInfo(kAudioContent1), &unused_container_id));
-  EXPECT_TRUE(notifier.NotifyNewContainer(
-      ConvertToMediaInfo(kAudioContent2), &unused_container_id));
-  EXPECT_TRUE(notifier.NotifyNewContainer(
-      ConvertToMediaInfo(kAudioContent3), &unused_container_id));
-  EXPECT_TRUE(notifier.NotifyNewContainer(
-      ConvertToMediaInfo(kAudioContent4), &unused_container_id));
+  EXPECT_TRUE(
+      notifier.NotifyNewContainer(valid_media_info1_, &unused_container_id));
+  EXPECT_TRUE(
+      notifier.NotifyNewContainer(valid_media_info2_, &unused_container_id));
+  EXPECT_TRUE(
+      notifier.NotifyNewContainer(valid_media_info3_, &unused_container_id));
 }
-
-INSTANTIATE_TEST_CASE_P(StaticAndDynamic,
-                        SimpleMpdNotifierTest,
-                        ::testing::Values(MpdBuilder::kStatic,
-                                          MpdBuilder::kDynamic));
 
 }  // namespace shaka

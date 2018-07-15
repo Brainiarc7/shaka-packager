@@ -79,7 +79,7 @@ TrackRunIterator::~TrackRunIterator() {}
 static void PopulateSampleInfo(const TrackExtends& trex,
                                const TrackFragmentHeader& tfhd,
                                const TrackFragmentRun& trun,
-                               const uint32_t i,
+                               const size_t i,
                                SampleInfo* sample_info) {
   if (i < trun.sample_sizes.size()) {
     sample_info->size = trun.sample_sizes[i];
@@ -187,14 +187,16 @@ bool TrackRunIterator::Init() {
     int64_t run_start_dts = 0;
 
     uint32_t num_samples = sample_size.sample_count;
-    uint32_t num_chunks = chunk_offset_vector.size();
+    uint32_t num_chunks = static_cast<uint32_t>(chunk_offset_vector.size());
 
     // Check that total number of samples match.
     DCHECK_EQ(num_samples, decoding_time.NumSamples());
-    if (has_composition_offset)
+    if (has_composition_offset) {
       DCHECK_EQ(num_samples, composition_offset.NumSamples());
-    if (num_chunks > 0)
+    }
+    if (num_chunks > 0) {
       DCHECK_EQ(num_samples, chunk_info.NumSamples(1, num_chunks));
+    }
     DCHECK_GE(num_chunks, chunk_info.LastFirstChunk());
 
     if (num_samples > 0) {
@@ -410,7 +412,8 @@ bool TrackRunIterator::Init(const MovieFragment& moof) {
 
       tri.samples.resize(trun.sample_count);
       for (size_t k = 0; k < trun.sample_count; k++) {
-        PopulateSampleInfo(*trex, traf.header, trun, k, &tri.samples[k]);
+        PopulateSampleInfo(*trex, traf.header, trun, k,
+                           &tri.samples[k]);
         run_start_dts += tri.samples[k].duration;
       }
       runs_.push_back(tri);
@@ -589,24 +592,30 @@ const TrackEncryption& TrackRunIterator::track_encryption() const {
 }
 
 std::unique_ptr<DecryptConfig> TrackRunIterator::GetDecryptConfig() {
-  size_t sample_idx = sample_itr_ - run_itr_->samples.begin();
-  DCHECK_LT(sample_idx, run_itr_->sample_encryption_entries.size());
-  const SampleEncryptionEntry& sample_encryption_entry =
-      run_itr_->sample_encryption_entries[sample_idx];
-  DCHECK(is_encrypted());
-  DCHECK(!AuxInfoNeedsToBeCached());
+  std::vector<uint8_t> iv;
+  std::vector<SubsampleEntry> subsamples;
 
-  const size_t total_size_of_subsamples =
-      sample_encryption_entry.GetTotalSizeOfSubsamples();
-  if (total_size_of_subsamples != 0 &&
-      total_size_of_subsamples != static_cast<size_t>(sample_size())) {
-    LOG(ERROR) << "Incorrect CENC subsample size.";
-    return std::unique_ptr<DecryptConfig>();
+  size_t sample_idx = sample_itr_ - run_itr_->samples.begin();
+  if (sample_idx < run_itr_->sample_encryption_entries.size()) {
+    const SampleEncryptionEntry& sample_encryption_entry =
+        run_itr_->sample_encryption_entries[sample_idx];
+    DCHECK(is_encrypted());
+    DCHECK(!AuxInfoNeedsToBeCached());
+
+    const size_t total_size_of_subsamples =
+        sample_encryption_entry.GetTotalSizeOfSubsamples();
+    if (total_size_of_subsamples != 0 &&
+        total_size_of_subsamples != static_cast<size_t>(sample_size())) {
+      LOG(ERROR) << "Incorrect CENC subsample size.";
+      return std::unique_ptr<DecryptConfig>();
+    }
+
+    iv = sample_encryption_entry.initialization_vector;
+    subsamples = sample_encryption_entry.subsamples;
   }
 
   FourCC protection_scheme = is_audio() ? audio_description().sinf.type.type
                                         : video_description().sinf.type.type;
-  std::vector<uint8_t> iv = sample_encryption_entry.initialization_vector;
   if (iv.empty()) {
     if (protection_scheme != FOURCC_cbcs) {
       LOG(WARNING)
@@ -619,8 +628,8 @@ std::unique_ptr<DecryptConfig> TrackRunIterator::GetDecryptConfig() {
     }
   }
   return std::unique_ptr<DecryptConfig>(new DecryptConfig(
-      track_encryption().default_kid, iv, sample_encryption_entry.subsamples,
-      protection_scheme, track_encryption().default_crypt_byte_block,
+      track_encryption().default_kid, iv, subsamples, protection_scheme,
+      track_encryption().default_crypt_byte_block,
       track_encryption().default_skip_byte_block));
 }
 

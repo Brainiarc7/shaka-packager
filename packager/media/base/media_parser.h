@@ -4,15 +4,14 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_BASE_MEDIA_PARSER_H_
-#define MEDIA_BASE_MEDIA_PARSER_H_
+#ifndef PACKAGER_MEDIA_BASE_MEDIA_PARSER_H_
+#define PACKAGER_MEDIA_BASE_MEDIA_PARSER_H_
 
 #include <memory>
 #include <string>
 #include <vector>
 #include "packager/base/callback.h"
 #include "packager/base/compiler_specific.h"
-#include "packager/base/memory/ref_counted.h"
 #include "packager/media/base/container_names.h"
 
 namespace shaka {
@@ -30,8 +29,9 @@ class MediaParser {
   /// Called upon completion of parser initialization.
   /// @param stream_info contains the stream info of all the elementary streams
   ///        within this file.
-  typedef base::Callback<
-      void(const std::vector<scoped_refptr<StreamInfo> >& stream_info)> InitCB;
+  typedef base::Callback<void(
+      const std::vector<std::shared_ptr<StreamInfo> >& stream_info)>
+      InitCB;
 
   /// Called when a new media sample has been parsed.
   /// @param track_id is the track id of the new sample.
@@ -39,7 +39,7 @@ class MediaParser {
   /// @return true if the sample is accepted, false if something was wrong
   ///         with the sample and a parsing error should be signaled.
   typedef base::Callback<bool(uint32_t track_id,
-                              const scoped_refptr<MediaSample>& media_sample)>
+                              const std::shared_ptr<MediaSample>& media_sample)>
       NewSampleCB;
 
   /// Initialize the parser with necessary callbacks. Must be called before any
@@ -69,4 +69,4 @@ class MediaParser {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_BASE_MEDIA_PARSER_H_
+#endif  // PACKAGER_MEDIA_BASE_MEDIA_PARSER_H_

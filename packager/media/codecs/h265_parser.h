@@ -4,8 +4,8 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_CODECS_H265_PARSER_H_
-#define MEDIA_CODECS_H265_PARSER_H_
+#ifndef PACKAGER_MEDIA_CODECS_H265_PARSER_H_
+#define PACKAGER_MEDIA_CODECS_H265_PARSER_H_
 
 #include <map>
 #include <memory>
@@ -131,7 +131,11 @@ struct H265Sps {
   int video_parameter_set_id = 0;
   int max_sub_layers_minus1 = 0;
   bool temporal_id_nesting_flag = false;
-  // Ignored: profile_tier_level(...)
+
+  // general_profile_space (2), general_tier_flag (1), general_profile_idc (5),
+  // general_profile_compatibility_flags (32),
+  // general_constraint_indicator_flags (48), general_level_idc (8).
+  int general_profile_tier_level_data[12] = {};
 
   int seq_parameter_set_id = 0;
 
@@ -218,7 +222,11 @@ struct H265SliceHeader {
   // Many of the fields here are required when parsing so the default here may
   // not be valid.
 
-  int header_bit_size = 0;
+  // This is the size of the slice header not including the nalu header byte.
+  // Sturcture: |NALU Header |     Slice Header    |    Slice Data    |
+  // Size:      |<- 16bits ->|<- header_bit_size ->|<- Rest of nalu ->|
+  // Note that this is not a field in the H.265 spec.
+  size_t header_bit_size = 0;
 
   bool first_slice_segment_in_pic_flag = false;
   bool no_output_of_prior_pics_flag = false;
@@ -330,9 +338,10 @@ class H265Parser {
                                    const H265SliceHeader& slice_header,
                                    H26xBitReader* br);
 
-  Result SkipProfileTierLevel(bool profile_present,
+  Result ReadProfileTierLevel(bool profile_present,
                               int max_num_sub_layers_minus1,
-                              H26xBitReader* br);
+                              H26xBitReader* br,
+                              H265Sps* sps);
 
   Result SkipScalingListData(H26xBitReader* br);
 
@@ -342,8 +351,10 @@ class H265Parser {
                                    bool sub_pic_hdr_params_present_flag,
                                    H26xBitReader* br);
 
-  typedef std::map<int, H265Sps*> SpsById;
-  typedef std::map<int, H265Pps*> PpsById;
+  Result ByteAlignment(H26xBitReader* br);
+
+  typedef std::map<int, std::unique_ptr<H265Sps>> SpsById;
+  typedef std::map<int, std::unique_ptr<H265Pps>> PpsById;
 
   SpsById active_spses_;
   PpsById active_ppses_;
@@ -354,4 +365,4 @@ class H265Parser {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_CODECS_H265_PARSER_H_
+#endif  // PACKAGER_MEDIA_CODECS_H265_PARSER_H_

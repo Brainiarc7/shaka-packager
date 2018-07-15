@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 // Media parser for a Widevine Media Format (WVM) file.
 
-#ifndef MEDIA_FORMATS_WVM_WVM_MEDIA_PARSER_H_
-#define MEDIA_FORMATS_WVM_WVM_MEDIA_PARSER_H_
+#ifndef PACKAGER_MEDIA_FORMATS_WVM_WVM_MEDIA_PARSER_H_
+#define PACKAGER_MEDIA_FORMATS_WVM_WVM_MEDIA_PARSER_H_
 
 #include <deque>
 #include <map>
@@ -32,7 +32,7 @@ struct DemuxStreamIdMediaSample {
   ~DemuxStreamIdMediaSample();
   uint32_t demux_stream_id;
   uint32_t parsed_audio_or_video_stream_id;
-  scoped_refptr<MediaSample> media_sample;
+  std::shared_ptr<MediaSample> media_sample;
 };
 
 struct PrevSampleData {
@@ -40,8 +40,8 @@ struct PrevSampleData {
   PrevSampleData();
   ~PrevSampleData();
   void Reset();
-  scoped_refptr<MediaSample> audio_sample;
-  scoped_refptr<MediaSample> video_sample;
+  std::shared_ptr<MediaSample> audio_sample;
+  std::shared_ptr<MediaSample> video_sample;
   uint32_t audio_stream_id;
   uint32_t video_stream_id;
   int64_t audio_sample_duration;
@@ -69,7 +69,7 @@ class WvmMediaParser : public MediaParser {
     TrackSize = 2,
     TrackDuration = 3,
     TrackBitRate = 4,
-    TrackTrickPlayRate = 5,
+    TrackTrickPlayFactor = 5,
     TrackAdaptationInterval = 6,
     TrackFlags = 7,
     VideoType = 8,
@@ -200,19 +200,19 @@ class WvmMediaParser : public MediaParser {
   // to ouput media sample as encrypted.
   bool Output(bool must_process_encrypted);
 
-  bool GetAssetKey(const uint32_t asset_id, EncryptionKey* encryption_key);
+  bool GetAssetKey(const uint8_t* asset_id, EncryptionKey* encryption_key);
 
   // Callback invoked by the ES media parser
   // to emit a new audio/video access unit.
   bool EmitSample(uint32_t parsed_audio_or_video_stream_id,
                   uint32_t stream_id,
-                  scoped_refptr<MediaSample>& new_sample,
+                  const std::shared_ptr<MediaSample>& new_sample,
                   bool isLastSample);
 
   bool EmitPendingSamples();
 
   bool EmitLastSample(uint32_t stream_id,
-                      scoped_refptr<MediaSample>& new_sample);
+                      const std::shared_ptr<MediaSample>& new_sample);
 
   // List of callbacks.t
   InitCB init_cb_;
@@ -228,26 +228,26 @@ class WvmMediaParser : public MediaParser {
   uint8_t current_program_id_;
   uint32_t pes_stream_id_;
   uint32_t prev_pes_stream_id_;
-  uint16_t pes_packet_bytes_;
+  size_t pes_packet_bytes_;
   uint8_t pes_flags_1_;
   uint8_t pes_flags_2_;
   uint8_t prev_pes_flags_1_;
-  uint8_t pes_header_data_bytes_;
+  size_t pes_header_data_bytes_;
   uint64_t timestamp_;
   uint64_t pts_;
   uint64_t dts_;
   uint8_t index_program_id_;
-  scoped_refptr<MediaSample> media_sample_;
-  uint32_t crypto_unit_start_pos_;
+  std::shared_ptr<MediaSample> media_sample_;
+  size_t crypto_unit_start_pos_;
   PrevSampleData prev_media_sample_data_;
   H264ByteToUnitStreamConverter byte_to_unit_stream_converter_;
 
-  std::vector<uint8_t, std::allocator<uint8_t> > ecm_;
+  std::vector<uint8_t, std::allocator<uint8_t>> ecm_;
   std::vector<uint8_t> psm_data_;
   std::vector<uint8_t> index_data_;
   std::map<std::string, uint32_t> program_demux_stream_map_;
   int stream_id_count_;
-  std::vector<scoped_refptr<StreamInfo> > stream_infos_;
+  std::vector<std::shared_ptr<StreamInfo>> stream_infos_;
   std::deque<DemuxStreamIdMediaSample> media_sample_queue_;
   std::vector<uint8_t> sample_data_;
   KeySource* decryption_key_source_;
@@ -260,4 +260,4 @@ class WvmMediaParser : public MediaParser {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_FORMATS_WVM_WVM_MEDIA_PARSER_H_
+#endif  // PACKAGER_MEDIA_FORMATS_WVM_WVM_MEDIA_PARSER_H_

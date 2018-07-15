@@ -4,22 +4,26 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_BASE_PSSH_H_
-#define MEDIA_BASE_PSSH_H_
+#ifndef PACKAGER_MEDIA_BASE_PROTECTION_SYSTEM_SPECIFIC_INFO_H_
+#define PACKAGER_MEDIA_BASE_PROTECTION_SYSTEM_SPECIFIC_INFO_H_
 
 #include <stdint.h>
+#include <memory>
 #include <vector>
 
 #include "packager/base/logging.h"
-#include "packager/media/base/buffer_reader.h"
+
+#define NO_PROTECTION_SYSTEM_FLAG 0x00
+#define COMMON_PROTECTION_SYSTEM_FLAG 0x01
+#define PLAYREADY_PROTECTION_SYSTEM_FLAG 0x02
+#define WIDEVINE_PROTECTION_SYSTEM_FLAG 0x04
 
 namespace shaka {
 namespace media {
 
-class ProtectionSystemSpecificInfo {
- public:
-  ProtectionSystemSpecificInfo();
-  ~ProtectionSystemSpecificInfo();
+struct ProtectionSystemSpecificInfo {
+  std::vector<uint8_t> system_id;
+  std::vector<uint8_t> psshs;
 
   /// Parses multiple PSSH boxes from @a data.  These boxes should be
   /// concatenated together.  Any non-PSSH box is an error.
@@ -28,10 +32,17 @@ class ProtectionSystemSpecificInfo {
       const uint8_t* data,
       size_t data_size,
       std::vector<ProtectionSystemSpecificInfo>* pssh_boxes);
+};
+
+class PsshBoxBuilder {
+ public:
+  PsshBoxBuilder() = default;
+  ~PsshBoxBuilder() = default;
 
   /// Parses the given PSSH box into this object.
-  /// @return true on success; false on failure.
-  bool Parse(const uint8_t* data, size_t data_size);
+  /// @return nullptr on failure.
+  static std::unique_ptr<PsshBoxBuilder> ParseFromBox(const uint8_t* data,
+                                                      size_t data_size);
 
   /// Creates a PSSH box for the current data.
   std::vector<uint8_t> CreateBox() const;
@@ -50,7 +61,6 @@ class ProtectionSystemSpecificInfo {
     system_id_.assign(system_id, system_id + system_id_size);
   }
   void add_key_id(const std::vector<uint8_t>& key_id) {
-    DCHECK_EQ(16u, key_id.size());
     key_ids_.push_back(key_id);
   }
   void clear_key_ids() { key_ids_.clear(); }
@@ -59,17 +69,16 @@ class ProtectionSystemSpecificInfo {
   }
 
  private:
-  uint8_t version_;
+  PsshBoxBuilder(const PsshBoxBuilder&) = delete;
+  PsshBoxBuilder& operator=(const PsshBoxBuilder&) = delete;
+
+  uint8_t version_ = 0;
   std::vector<uint8_t> system_id_;
   std::vector<std::vector<uint8_t>> key_ids_;
   std::vector<uint8_t> pssh_data_;
-
-  // Don't use DISALLOW_COPY_AND_ASSIGN since the data stored here should be
-  // small, so the performance impact should be minimal.
 };
 
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_BASE_PSSH_H_
-
+#endif  // PACKAGER_MEDIA_BASE_PROTECTION_SYSTEM_SPECIFIC_INFO_H_

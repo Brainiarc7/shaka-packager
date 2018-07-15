@@ -12,7 +12,6 @@
 #include <string>
 #include <vector>
 
-#include "packager/base/gtest_prod_util.h"
 #include "packager/base/synchronization/lock.h"
 #include "packager/mpd/base/mpd_notifier.h"
 #include "packager/mpd/base/mpd_notifier_util.h"
@@ -22,7 +21,6 @@ namespace shaka {
 class AdaptationSet;
 class MpdBuilder;
 class Representation;
-class SimpleMpdNotifierTest;
 
 struct MpdOptions;
 
@@ -30,39 +28,38 @@ struct MpdOptions;
 /// generates an Mpd file.
 class SimpleMpdNotifier : public MpdNotifier {
  public:
-  SimpleMpdNotifier(DashProfile dash_profile,
-                    const MpdOptions& mpd_options,
-                    const std::vector<std::string>& base_urls,
-                    const std::string& output_path);
+  explicit SimpleMpdNotifier(const MpdOptions& mpd_options);
   ~SimpleMpdNotifier() override;
 
+  /// None of the methods write out the MPD file until Flush() is called.
   /// @name MpdNotifier implemetation overrides.
   /// @{
   bool Init() override;
   bool NotifyNewContainer(const MediaInfo& media_info, uint32_t* id) override;
   bool NotifySampleDuration(uint32_t container_id,
                             uint32_t sample_duration) override;
-  bool NotifyNewSegment(uint32_t id,
+  bool NotifyNewSegment(uint32_t container_id,
                         uint64_t start_time,
                         uint64_t duration,
                         uint64_t size) override;
+  bool NotifyCueEvent(uint32_t container_id, uint64_t timestamp) override;
   bool NotifyEncryptionUpdate(uint32_t container_id,
                               const std::string& drm_uuid,
                               const std::vector<uint8_t>& new_key_id,
                               const std::vector<uint8_t>& new_pssh) override;
-  bool AddContentProtectionElement(
-      uint32_t id,
-      const ContentProtectionElement& content_protection_element) override;
+  bool NotifyMediaInfoUpdate(uint32_t container_id,
+                             const MediaInfo& media_info) override;
   bool Flush() override;
   /// @}
 
  private:
+  SimpleMpdNotifier(const SimpleMpdNotifier&) = delete;
+  SimpleMpdNotifier& operator=(const SimpleMpdNotifier&) = delete;
+
   friend class SimpleMpdNotifierTest;
 
   // Testing only method. Returns a pointer to MpdBuilder.
-  MpdBuilder* MpdBuilderForTesting() const {
-    return mpd_builder_.get();
-  }
+  MpdBuilder* MpdBuilderForTesting() const { return mpd_builder_.get(); }
 
   // Testing only method. Sets mpd_builder_.
   void SetMpdBuilderForTesting(std::unique_ptr<MpdBuilder> mpd_builder) {
@@ -72,15 +69,14 @@ class SimpleMpdNotifier : public MpdNotifier {
   // MPD output path.
   std::string output_path_;
   std::unique_ptr<MpdBuilder> mpd_builder_;
+  bool content_protection_in_adaptation_set_ = true;
   base::Lock lock_;
 
-  typedef std::map<std::string, AdaptationSet*> AdaptationSetMap;
-  AdaptationSetMap adaptation_set_map_;
-
-  typedef std::map<uint32_t, Representation*> RepresentationMap;
-  RepresentationMap representation_map_;
-
-  DISALLOW_COPY_AND_ASSIGN(SimpleMpdNotifier);
+  uint32_t next_adaptation_set_id_ = 0;
+  // Maps Representation ID to Representation.
+  std::map<uint32_t, Representation*> representation_map_;
+  // Maps Representation ID to AdaptationSet. This is for updating the PSSH.
+  std::map<uint32_t, AdaptationSet*> representation_id_to_adaptation_set_;
 };
 
 }  // namespace shaka

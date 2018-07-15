@@ -15,24 +15,20 @@
 #include <vector>
 
 #include "packager/base/macros.h"
+#include "packager/mpd/base/mpd_options.h"
 
 namespace shaka {
 
 class MediaInfo;
 struct ContentProtectionElement;
 
-enum DashProfile {
-  kUnknownProfile,
-  kOnDemandProfile,
-  kLiveProfile,
-};
-
 /// Interface for publish/subscribe publisher class which notifies MpdBuilder
 /// of media-related events.
 class MpdNotifier {
  public:
-  MpdNotifier(DashProfile dash_profile) : dash_profile_(dash_profile) {};
-  virtual ~MpdNotifier() {};
+  explicit MpdNotifier(const MpdOptions& mpd_options)
+      : mpd_options_(mpd_options) {}
+  virtual ~MpdNotifier() {}
 
   /// Initializes the notifier. For example, if this notifier uses a network for
   /// notification, then this would set up the connection with the remote host.
@@ -75,6 +71,13 @@ class MpdNotifier {
                                 uint64_t duration,
                                 uint64_t size) = 0;
 
+  /// Notifies MpdBuilder that there is a new CueEvent.
+  /// @param container_id Container ID obtained from calling
+  ///        NotifyNewContainer().
+  /// @param timestamp is the timestamp of the CueEvent.
+  /// @return true on success, false otherwise.
+  virtual bool NotifyCueEvent(uint32_t container_id, uint64_t timestamp) = 0;
+
   /// Notifiers MpdBuilder that there is a new PSSH for the container.
   /// This may be called whenever the key has to change, e.g. key rotation.
   /// @param container_id Container ID obtained from calling
@@ -89,15 +92,12 @@ class MpdNotifier {
                                       const std::vector<uint8_t>& new_key_id,
                                       const std::vector<uint8_t>& new_pssh) = 0;
 
-  /// Adds content protection information to the MPD.
-  /// @param container_id is the nummeric container ID obtained from calling
+  /// @param container_id Container ID obtained from calling
   ///        NotifyNewContainer().
-  /// @param content_protection_element New ContentProtection element
-  ///        specification.
-  /// @return true on success, false otherwise.
-  virtual bool AddContentProtectionElement(
-      uint32_t container_id,
-      const ContentProtectionElement& content_protection_element) = 0;
+  /// @param media_info is the new MediaInfo. Note that codec related
+  ///        information cannot be updated.
+  virtual bool NotifyMediaInfoUpdate(uint32_t container_id,
+                                     const MediaInfo& media_info) = 0;
 
   /// Call this method to force a flush. Implementations might not write out
   /// the MPD to a stream (file, stdout, etc.) when the MPD is updated, this
@@ -105,10 +105,13 @@ class MpdNotifier {
   virtual bool Flush() = 0;
 
   /// @return The dash profile for this object.
-  DashProfile dash_profile() const { return dash_profile_; }
+  DashProfile dash_profile() const { return mpd_options_.dash_profile; }
+
+  /// @return The mpd type for this object.
+  MpdType mpd_type() const { return mpd_options_.mpd_type; }
 
  private:
-  const DashProfile dash_profile_;
+  const MpdOptions mpd_options_;
 
   DISALLOW_COPY_AND_ASSIGN(MpdNotifier);
 };

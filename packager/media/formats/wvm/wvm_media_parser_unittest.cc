@@ -11,10 +11,9 @@
 #include "packager/base/bind.h"
 #include "packager/base/bind_helpers.h"
 #include "packager/base/logging.h"
-#include "packager/base/memory/ref_counted.h"
 #include "packager/media/base/audio_stream_info.h"
-#include "packager/media/base/fixed_key_source.h"
 #include "packager/media/base/media_sample.h"
+#include "packager/media/base/raw_key_source.h"
 #include "packager/media/base/request_signer.h"
 #include "packager/media/base/stream_info.h"
 #include "packager/media/base/timestamp.h"
@@ -48,14 +47,16 @@ using ::testing::SetArgPointee;
 namespace shaka {
 namespace media {
 
-class MockKeySource : public FixedKeySource {
+class MockKeySource : public RawKeySource {
  public:
   MockKeySource() {}
   ~MockKeySource() override {}
 
-  MOCK_METHOD1(FetchKeys, Status(uint32_t asset_id));
-  MOCK_METHOD2(GetKey, Status(TrackType track_type,
-                              EncryptionKey* key));
+  MOCK_METHOD2(FetchKeys,
+               Status(EmeInitDataType init_data_type,
+                      const std::vector<uint8_t>& init_data));
+  MOCK_METHOD2(GetKey,
+               Status(const std::string& stream_label, EncryptionKey* key));
 
  private:
   DISALLOW_COPY_AND_ASSIGN(MockKeySource);
@@ -78,7 +79,7 @@ class WvmMediaParserTest : public testing::Test {
   }
 
  protected:
-  typedef std::map<int, scoped_refptr<StreamInfo> > StreamMap;
+  typedef std::map<int, std::shared_ptr<StreamInfo>> StreamMap;
 
   std::unique_ptr<WvmMediaParser> parser_;
   std::unique_ptr<MockKeySource> key_source_;
@@ -90,17 +91,16 @@ class WvmMediaParserTest : public testing::Test {
   int32_t current_track_id_;
   EncryptionKey encryption_key_;
 
-  void OnInit(const std::vector<scoped_refptr<StreamInfo> >& stream_infos) {
+  void OnInit(const std::vector<std::shared_ptr<StreamInfo>>& stream_infos) {
     DVLOG(1) << "OnInit: " << stream_infos.size() << " streams.";
-    for (std::vector<scoped_refptr<StreamInfo> >::const_iterator iter =
-             stream_infos.begin(); iter != stream_infos.end(); ++iter) {
-      DVLOG(1) << (*iter)->ToString();
-      stream_map_[(*iter)->track_id()] = *iter;
+    for (const auto& stream_info : stream_infos) {
+      DVLOG(1) << stream_info->ToString();
+      stream_map_[stream_info->track_id()] = stream_info;
     }
   }
 
   bool OnNewSample(uint32_t track_id,
-                   const scoped_refptr<MediaSample>& sample) {
+                   const std::shared_ptr<MediaSample>& sample) {
     std::string stream_type;
     if (static_cast<int32_t>(track_id) != current_track_id_) {
       // onto next track.
@@ -151,7 +151,7 @@ class WvmMediaParserTest : public testing::Test {
     InitializeParser();
 
     std::vector<uint8_t> buffer = ReadTestDataFile(filename);
-    EXPECT_TRUE(parser_->Parse(buffer.data(), buffer.size()));
+    EXPECT_TRUE(parser_->Parse(buffer.data(), static_cast<int>(buffer.size())));
   }
 };
 
@@ -159,7 +159,7 @@ TEST_F(WvmMediaParserTest, ParseWvmWithoutKeySource) {
   key_source_.reset();
   InitializeParser();
   std::vector<uint8_t> buffer = ReadTestDataFile(kWvmFile);
-  EXPECT_TRUE(parser_->Parse(buffer.data(), buffer.size()));
+  EXPECT_TRUE(parser_->Parse(buffer.data(), static_cast<int>(buffer.size())));
   EXPECT_EQ(kExpectedStreams, stream_map_.size());
   EXPECT_EQ(kExpectedVideoFrameCount, video_frame_count_);
   EXPECT_EQ(kExpectedAudioFrameCount, audio_frame_count_);
@@ -187,7 +187,7 @@ TEST_F(WvmMediaParserTest, ParseWvmInitWithoutKeySource) {
 }
 
 TEST_F(WvmMediaParserTest, ParseWvm) {
-  EXPECT_CALL(*key_source_, FetchKeys(_)).WillOnce(Return(Status::OK));
+  EXPECT_CALL(*key_source_, FetchKeys(_, _)).WillOnce(Return(Status::OK));
   EXPECT_CALL(*key_source_, GetKey(_, _))
       .WillOnce(DoAll(SetArgPointee<1>(encryption_key_), Return(Status::OK)));
   Parse(kWvmFile);
@@ -198,7 +198,7 @@ TEST_F(WvmMediaParserTest, ParseWvm) {
 }
 
 TEST_F(WvmMediaParserTest, ParseWvmWith64ByteAssetKey) {
-  EXPECT_CALL(*key_source_, FetchKeys(_)).WillOnce(Return(Status::OK));
+  EXPECT_CALL(*key_source_, FetchKeys(_, _)).WillOnce(Return(Status::OK));
   // WVM uses only the first 16 bytes of the asset key.
   encryption_key_.key.resize(64);
   encryption_key_.key.assign(k64ByteAssetKey, k64ByteAssetKey + 64);
@@ -211,11 +211,11 @@ TEST_F(WvmMediaParserTest, ParseWvmWith64ByteAssetKey) {
 }
 
 TEST_F(WvmMediaParserTest, ParseMultiConfigWvm) {
-  EXPECT_CALL(*key_source_, FetchKeys(_)).WillOnce(Return(Status::OK));
+  EXPECT_CALL(*key_source_, FetchKeys(_, _)).WillOnce(Return(Status::OK));
   EXPECT_CALL(*key_source_, GetKey(_, _))
       .WillOnce(DoAll(SetArgPointee<1>(encryption_key_), Return(Status::OK)));
   Parse(kMultiConfigWvmFile);
-  EXPECT_EQ(6u, stream_map_.size());
+  ASSERT_EQ(4u, stream_map_.size());
 
   ASSERT_EQ(kStreamVideo, stream_map_[0]->stream_type());
   VideoStreamInfo* video_info = reinterpret_cast<VideoStreamInfo*>(
@@ -242,18 +242,6 @@ TEST_F(WvmMediaParserTest, ParseMultiConfigWvm) {
   EXPECT_EQ("mp4a.40.2", audio_info->codec_string());
   EXPECT_EQ(2u, audio_info->num_channels());
   EXPECT_EQ(44100u, audio_info->sampling_frequency());
-
-  ASSERT_EQ(kStreamVideo, stream_map_[4]->stream_type());
-  video_info = reinterpret_cast<VideoStreamInfo*>(stream_map_[4].get());
-  EXPECT_EQ("avc1.64001f", video_info->codec_string());
-  EXPECT_EQ(1280u, video_info->width());
-  EXPECT_EQ(720u, video_info->height());
-
-  ASSERT_EQ(kStreamAudio, stream_map_[5]->stream_type());
-  audio_info = reinterpret_cast<AudioStreamInfo*>(stream_map_[5].get());
-  EXPECT_EQ("mp4a.40.2", audio_info->codec_string());
-  EXPECT_EQ(2u, audio_info->num_channels());
-  EXPECT_EQ(48000u, audio_info->sampling_frequency());
 }
 
 }  // namespace wvm

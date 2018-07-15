@@ -6,6 +6,7 @@
 
 #include "packager/media/event/muxer_listener_internal.h"
 
+#include <google/protobuf/util/message_differencer.h>
 #include <math.h>
 
 #include "packager/base/logging.h"
@@ -14,9 +15,12 @@
 #include "packager/media/base/audio_stream_info.h"
 #include "packager/media/base/muxer_options.h"
 #include "packager/media/base/protection_system_specific_info.h"
+#include "packager/media/base/text_stream_info.h"
 #include "packager/media/base/video_stream_info.h"
 #include "packager/media/codecs/ec3_audio_util.h"
 #include "packager/mpd/base/media_info.pb.h"
+
+using ::google::protobuf::util::MessageDifferencer;
 
 namespace shaka {
 namespace media {
@@ -24,39 +28,12 @@ namespace internal {
 
 namespace {
 
-// This will return a positive value, given that |file_size| and
-// |duration_seconds| are positive.
-uint32_t EstimateRequiredBandwidth(uint64_t file_size, float duration_seconds) {
-  const uint64_t file_size_bits = file_size * 8;
-  const float bits_per_second = file_size_bits / duration_seconds;
-
-  // Note that casting |bits_per_second| to an integer might make it 0. Take the
-  // ceiling and make sure that it returns a positive value.
-  return static_cast<uint32_t>(ceil(bits_per_second));
-}
-
-void SetRange(uint64_t begin, uint64_t end, Range* range) {
+// TODO(rkuroiwa): There is shaka::Range in MediaInfo proto and
+// shaka::media::Range in media/base. Find better names.
+void SetRange(uint64_t begin, uint64_t end, shaka::Range* range) {
   DCHECK(range);
   range->set_begin(begin);
   range->set_end(end);
-}
-
-void SetMediaInfoRanges(bool has_init_range,
-                        uint64_t init_range_start,
-                        uint64_t init_range_end,
-                        bool has_index_range,
-                        uint64_t index_range_start,
-                        uint64_t index_range_end,
-                        MediaInfo* media_info) {
-  if (has_init_range) {
-    SetRange(
-        init_range_start, init_range_end, media_info->mutable_init_range());
-  }
-
-  if (has_index_range) {
-    SetRange(
-        index_range_start, index_range_end, media_info->mutable_index_range());
-  }
 }
 
 void SetMediaInfoContainerType(MuxerListener::ContainerType container_type,
@@ -72,8 +49,14 @@ void SetMediaInfoContainerType(MuxerListener::ContainerType container_type,
     case MuxerListener::kContainerMpeg2ts:
       media_info->set_container_type(MediaInfo::CONTAINER_MPEG2_TS);
       break;
+    case MuxerListener::kContainerPackedAudio:
+      media_info->set_container_type(MediaInfo::CONTAINER_PACKED_AUDIO);
+      break;
     case MuxerListener::kContainerWebM:
       media_info->set_container_type(MediaInfo::CONTAINER_WEBM);
+      break;
+    case MuxerListener::kContainerText:
+      media_info->set_container_type(MediaInfo::CONTAINER_TEXT);
       break;
     default:
       NOTREACHED() << "Unknown container type " << container_type;
@@ -99,6 +82,10 @@ void AddVideoInfo(const VideoStreamInfo* video_stream_info,
   const std::vector<uint8_t>& codec_config = video_stream_info->codec_config();
   if (!codec_config.empty()) {
     video_info->set_decoder_config(&codec_config[0], codec_config.size());
+  }
+
+  if (video_stream_info->playback_rate() > 0) {
+    video_info->set_playback_rate(video_stream_info->playback_rate());
   }
 }
 
@@ -134,28 +121,63 @@ void AddAudioInfo(const AudioStreamInfo* audio_stream_info,
   }
 }
 
+void AddTextInfo(const TextStreamInfo& text_stream_info,
+                 MediaInfo* media_info) {
+  // For now, set everything as subtitle.
+  MediaInfo::TextInfo* text_info = media_info->mutable_text_info();
+  text_info->set_type(MediaInfo::TextInfo::SUBTITLE);
+  text_info->set_codec(text_stream_info.codec_string());
+  text_info->set_language(text_stream_info.language());
+}
+
 void SetMediaInfoStreamInfo(const StreamInfo& stream_info,
                             MediaInfo* media_info) {
   if (stream_info.stream_type() == kStreamAudio) {
-    AddAudioInfo(static_cast<const AudioStreamInfo*>(&stream_info),
-                 media_info);
+    AddAudioInfo(static_cast<const AudioStreamInfo*>(&stream_info), media_info);
+  } else if (stream_info.stream_type() == kStreamText) {
+    AddTextInfo(static_cast<const TextStreamInfo&>(stream_info), media_info);
   } else {
     DCHECK_EQ(stream_info.stream_type(), kStreamVideo);
-    AddVideoInfo(static_cast<const VideoStreamInfo*>(&stream_info),
-                 media_info);
+    AddVideoInfo(static_cast<const VideoStreamInfo*>(&stream_info), media_info);
+  }
+  if (stream_info.duration() > 0) {
+    // |stream_info.duration()| contains the media duration from the original
+    // media header, which is usually good enough.
+    media_info->set_media_duration_seconds(
+        static_cast<double>(stream_info.duration()) / stream_info.time_scale());
   }
 }
 
 void SetMediaInfoMuxerOptions(const MuxerOptions& muxer_options,
                               MediaInfo* media_info) {
   DCHECK(media_info);
-  if (muxer_options.single_segment) {
+  if (muxer_options.segment_template.empty()) {
     media_info->set_media_file_name(muxer_options.output_file_name);
-    DCHECK(muxer_options.segment_template.empty());
   } else {
-    media_info->set_init_segment_name(muxer_options.output_file_name);
+    if (!muxer_options.output_file_name.empty())
+      media_info->set_init_segment_name(muxer_options.output_file_name);
     media_info->set_segment_template(muxer_options.segment_template);
   }
+}
+
+// Adjust MediaInfo for compatibility comparison. MediaInfos are considered to
+// be compatible if codec and container are the same.
+MediaInfo GetCompatibleComparisonMediaInfo(const MediaInfo& media_info) {
+  MediaInfo adjusted_media_info;
+  adjusted_media_info.set_reference_time_scale(
+      media_info.reference_time_scale());
+  adjusted_media_info.set_container_type(media_info.container_type());
+  if (media_info.has_video_info()) {
+    *adjusted_media_info.mutable_video_info() = media_info.video_info();
+    adjusted_media_info.mutable_video_info()->clear_frame_duration();
+  }
+  if (media_info.has_audio_info()) {
+    *adjusted_media_info.mutable_audio_info() = media_info.audio_info();
+  }
+  if (media_info.has_text_info()) {
+    *adjusted_media_info.mutable_text_info() = media_info.text_info();
+  }
+  return adjusted_media_info;
 }
 
 }  // namespace
@@ -177,20 +199,17 @@ bool GenerateMediaInfo(const MuxerOptions& muxer_options,
   return true;
 }
 
-bool SetVodInformation(bool has_init_range,
-                       uint64_t init_range_start,
-                       uint64_t init_range_end,
-                       bool has_index_range,
-                       uint64_t index_range_start,
-                       uint64_t index_range_end,
+bool IsMediaInfoCompatible(const MediaInfo& media_info1,
+                           const MediaInfo& media_info2) {
+  return MessageDifferencer::Equals(
+      GetCompatibleComparisonMediaInfo(media_info1),
+      GetCompatibleComparisonMediaInfo(media_info2));
+}
+
+bool SetVodInformation(const MuxerListener::MediaRanges& media_ranges,
                        float duration_seconds,
-                       uint64_t file_size,
                        MediaInfo* media_info) {
   DCHECK(media_info);
-  if (file_size == 0) {
-    LOG(ERROR) << "File size not specified.";
-    return false;
-  }
 
   if (duration_seconds <= 0.0f) {
     // Non positive second media must be invalid media.
@@ -198,46 +217,42 @@ bool SetVodInformation(bool has_init_range,
     return false;
   }
 
-  SetMediaInfoRanges(has_init_range,
-                     init_range_start,
-                     init_range_end,
-                     has_index_range,
-                     index_range_start,
-                     index_range_end,
-                     media_info);
+  if (media_ranges.init_range) {
+    SetRange(media_ranges.init_range->start, media_ranges.init_range->end,
+             media_info->mutable_init_range());
+  }
+
+  if (media_ranges.index_range) {
+    SetRange(media_ranges.index_range->start, media_ranges.index_range->end,
+             media_info->mutable_index_range());
+  }
 
   media_info->set_media_duration_seconds(duration_seconds);
 
-  if (!media_info->has_bandwidth()) {
-    media_info->set_bandwidth(
-        EstimateRequiredBandwidth(file_size, duration_seconds));
-  }
   return true;
 }
 
 void SetContentProtectionFields(
     FourCC protection_scheme,
-    const std::string& default_key_id,
+    const std::vector<uint8_t>& default_key_id,
     const std::vector<ProtectionSystemSpecificInfo>& key_system_info,
     MediaInfo* media_info) {
   DCHECK(media_info);
   MediaInfo::ProtectedContent* protected_content =
       media_info->mutable_protected_content();
-
-  DCHECK(protection_scheme == FOURCC_cenc || protection_scheme == FOURCC_cbc1 ||
-         protection_scheme == FOURCC_cens || protection_scheme == FOURCC_cbcs);
   protected_content->set_protection_scheme(FourCCToString(protection_scheme));
 
-  if (!default_key_id.empty())
-    protected_content->set_default_key_id(default_key_id);
+  if (!default_key_id.empty()) {
+    protected_content->set_default_key_id(default_key_id.data(),
+                                          default_key_id.size());
+  }
 
   for (const ProtectionSystemSpecificInfo& info : key_system_info) {
     MediaInfo::ProtectedContent::ContentProtectionEntry* entry =
         protected_content->add_content_protection_entry();
-    if (!info.system_id().empty())
-      entry->set_uuid(CreateUUIDString(info.system_id()));
+    entry->set_uuid(CreateUUIDString(info.system_id));
 
-    const std::vector<uint8_t> pssh = info.CreateBox();
+    const std::vector<uint8_t>& pssh = info.psshs;
     entry->set_pssh(pssh.data(), pssh.size());
   }
 }

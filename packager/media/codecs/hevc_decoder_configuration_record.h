@@ -4,14 +4,15 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_CODECS_HEVC_DECODER_CONFIGURATION_RECORD_H_
-#define MEDIA_CODECS_HEVC_DECODER_CONFIGURATION_RECORD_H_
+#ifndef PACKAGER_MEDIA_CODECS_HEVC_DECODER_CONFIGURATION_RECORD_H_
+#define PACKAGER_MEDIA_CODECS_HEVC_DECODER_CONFIGURATION_RECORD_H_
 
 #include <stdint.h>
 #include <string>
 #include <vector>
 
 #include "packager/base/macros.h"
+#include "packager/media/base/fourccs.h"
 #include "packager/media/base/video_stream_info.h"
 #include "packager/media/codecs/decoder_configuration_record.h"
 
@@ -25,7 +26,7 @@ class HEVCDecoderConfigurationRecord : public DecoderConfigurationRecord {
   ~HEVCDecoderConfigurationRecord() override;
 
   /// @return The codec string.
-  std::string GetCodecString(Codec codec) const;
+  std::string GetCodecString(FourCC codec_fourcc) const;
 
  private:
   bool ParseInternal() override;
@@ -44,4 +45,4 @@ class HEVCDecoderConfigurationRecord : public DecoderConfigurationRecord {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_CODECS_HEVC_DECODER_CONFIGURATION_RECORD_H_
+#endif  // PACKAGER_MEDIA_CODECS_HEVC_DECODER_CONFIGURATION_RECORD_H_

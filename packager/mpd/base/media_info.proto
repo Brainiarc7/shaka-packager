@@ -17,6 +17,7 @@ message MediaInfo {
     CONTAINER_MPEG2_TS= 2;
     CONTAINER_WEBM = 3;
     CONTAINER_TEXT = 4;
+    CONTAINER_PACKED_AUDIO = 5;
   }
 
   message VideoInfo {
@@ -40,6 +41,10 @@ message MediaInfo {
     // aspect ratio, or the @par attribute set on AdaptationSet element.
     optional uint32 pixel_width = 7;
     optional uint32 pixel_height = 8;
+
+    // playback_rate: the playout capability (e.g., 4x, 8x, 16x fast foward) of
+    // the trick play stream.
+    optional uint32 playback_rate = 9;
   }
 
   message AudioInfo {
@@ -64,7 +69,7 @@ message MediaInfo {
       CAPTION = 1;
       SUBTITLE = 2;
     }
-    optional string format = 1;
+    optional string codec = 1;
     optional string language = 2;
     optional TextType type = 3;
   }
@@ -84,6 +89,7 @@ message MediaInfo {
     optional bytes default_key_id = 1;
     repeated ContentProtectionEntry content_protection_entry = 2;
     // Specifies the protection scheme: 'cenc', 'cens', 'cbc1', 'cbcs'.
+    // "cbca" is also valid which is a place holder for SAMPLE-AES encryption.
     optional string protection_scheme = 3 [default = 'cenc'];
   }
 
@@ -128,14 +134,17 @@ message MediaInfo {
   // This is the reference time scale if there are multiple VideoInfo and/or
   // AudioInfo.
   optional uint32 reference_time_scale = 13;
+  optional uint64 presentation_time_offset = 16;
   optional ContainerType container_type = 14 [default = CONTAINER_UNKNOWN];
 
   // VOD only.
   optional Range init_range = 6;
   optional Range index_range = 7;
   optional string media_file_name = 8;
-  optional float media_duration_seconds = 9;
   // END VOD only.
+
+  // VOD and static LIVE.
+  optional float media_duration_seconds = 9;
 
   // LIVE only.
   optional string init_segment_name = 10;
@@ -143,6 +152,13 @@ message MediaInfo {
   // This value is the user input “segment duration”.
   // This value is not necessarily the same as the value passed to
   // MpdNotifier::NotifyNewSegment().
-  optional float segment_duration_seconds = 12;
+  optional float segment_duration_seconds = 12 [deprecated = true];
   // END LIVE only.
+
+  // URL fields for the corresponding file_name fields above.
+  // The file names are adjusted to be relative to DASH MPD or HLS media
+  // playlist, or with base url prepended.
+  optional string media_file_url = 17;
+  optional string init_segment_url = 18;
+  optional string segment_template_url = 19;
 }

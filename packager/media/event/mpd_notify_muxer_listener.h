@@ -6,15 +6,15 @@
 //
 // Implementation of MuxerListener that deals with MpdNotifier.
 
-#ifndef MEDIA_EVENT_MPD_NOTIFY_MUXER_LISTENER_H_
-#define MEDIA_EVENT_MPD_NOTIFY_MUXER_LISTENER_H_
+#ifndef PACKAGER_MEDIA_EVENT_MPD_NOTIFY_MUXER_LISTENER_H_
+#define PACKAGER_MEDIA_EVENT_MPD_NOTIFY_MUXER_LISTENER_H_
 
-#include <list>
 #include <memory>
 #include <vector>
 
-#include "packager/base/macros.h"
+#include "packager/base/optional.h"
 #include "packager/media/base/muxer_options.h"
+#include "packager/media/event/event_info.h"
 #include "packager/media/event/muxer_listener.h"
 
 namespace shaka {
@@ -45,48 +45,41 @@ class MpdNotifyMuxerListener : public MuxerListener {
                     uint32_t time_scale,
                     ContainerType container_type) override;
   void OnSampleDurationReady(uint32_t sample_duration) override;
-  void OnMediaEnd(bool has_init_range,
-                  uint64_t init_range_start,
-                  uint64_t init_range_end,
-                  bool has_index_range,
-                  uint64_t index_range_start,
-                  uint64_t index_range_end,
-                  float duration_seconds,
-                  uint64_t file_size) override;
+  void OnMediaEnd(const MediaRanges& media_ranges,
+                  float duration_seconds) override;
   void OnNewSegment(const std::string& file_name,
-                    uint64_t start_time,
-                    uint64_t duration,
+                    int64_t start_time,
+                    int64_t duration,
                     uint64_t segment_file_size) override;
+  void OnKeyFrame(int64_t timestamp, uint64_t start_byte_offset, uint64_t size);
+  void OnCueEvent(int64_t timestamp, const std::string& cue_data) override;
   /// @}
 
  private:
-  // This stores data passed into OnNewSegment() for VOD.
-  struct SubsegmentInfo {
-    uint64_t start_time;
-    uint64_t duration;
-    uint64_t segment_file_size;
-  };
+  MpdNotifyMuxerListener(const MpdNotifyMuxerListener&) = delete;
+  MpdNotifyMuxerListener& operator=(const MpdNotifyMuxerListener&) = delete;
 
-  MpdNotifier* const mpd_notifier_;
-  uint32_t notification_id_;
+  bool NotifyNewContainer();
+
+  MpdNotifier* const mpd_notifier_ = nullptr;
+  base::Optional<uint32_t> notification_id_;
   std::unique_ptr<MediaInfo> media_info_;
 
-  bool is_encrypted_;
+  bool is_encrypted_ = false;
   // Storage for values passed to OnEncryptionInfoReady().
-  FourCC protection_scheme_;
-  std::string default_key_id_;
+  FourCC protection_scheme_ = FOURCC_NULL;
+  std::vector<uint8_t> default_key_id_;
   std::vector<ProtectionSystemSpecificInfo> key_system_info_;
 
-  // Saves all the subsegment information for VOD. This should be used to call
-  // MpdNotifier::NotifyNewSegment() after NotifyNewSegment() is called
-  // (in OnMediaEnd). This is not used for live because NotifyNewSegment() is
-  // called immediately in OnNewSegment().
-  std::list<SubsegmentInfo> subsegments_;
-
-  DISALLOW_COPY_AND_ASSIGN(MpdNotifyMuxerListener);
+  // Saves all the Subsegment and CueEvent information for VOD. This should be
+  // used to call NotifyNewSegment() and NotifyCueEvent after
+  // NotifyNewContainer() is called (in OnMediaEnd). This is not used for live
+  // because NotifyNewSegment() is called immediately in OnNewSegment(), and
+  // NotifyCueEvent is called immediately in OnCueEvent.
+  std::vector<EventInfo> event_info_;
 };
 
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_EVENT_MPD_NOTIFY_MUXER_LISTENER_H_
+#endif  // PACKAGER_MEDIA_EVENT_MPD_NOTIFY_MUXER_LISTENER_H_

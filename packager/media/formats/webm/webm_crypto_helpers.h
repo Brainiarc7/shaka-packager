@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef MEDIA_FORMATS_WEBM_WEBM_CRYPTO_HELPERS_H_
-#define MEDIA_FORMATS_WEBM_WEBM_CRYPTO_HELPERS_H_
+#ifndef PACKAGER_MEDIA_FORMATS_WEBM_WEBM_CRYPTO_HELPERS_H_
+#define PACKAGER_MEDIA_FORMATS_WEBM_WEBM_CRYPTO_HELPERS_H_
 
 #include <stdint.h>
 #include <memory>
@@ -23,11 +23,11 @@ namespace media {
 bool WebMCreateDecryptConfig(const uint8_t* data,
                              int data_size,
                              const uint8_t* key_id,
-                             int key_id_size,
+                             size_t key_id_size,
                              std::unique_ptr<DecryptConfig>* decrypt_config,
                              int* data_offset);
 
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_FORMATS_WEBM_WEBM_CRYPT_HELPERS_H_
+#endif  // PACKAGER_MEDIA_FORMATS_WEBM_WEBM_CRYPT_HELPERS_H_

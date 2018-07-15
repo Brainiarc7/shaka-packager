@@ -4,31 +4,25 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_EVENT_MUXER_LISTENER_TEST_HELPER_H_
-#define MEDIA_EVENT_MUXER_LISTENER_TEST_HELPER_H_
+#ifndef PACKAGER_MEDIA_EVENT_MUXER_LISTENER_TEST_HELPER_H_
+#define PACKAGER_MEDIA_EVENT_MUXER_LISTENER_TEST_HELPER_H_
 
 #include <stdint.h>
 #include <vector>
 
-#include "packager/base/memory/ref_counted.h"
 #include "packager/media/base/key_source.h"
 #include "packager/media/base/muxer_options.h"
 #include "packager/media/base/stream_info.h"
 #include "packager/media/base/video_stream_info.h"
+#include "packager/media/event/muxer_listener.h"
 #include "packager/mpd/base/media_info.pb.h"
 
 namespace shaka {
 
 namespace media {
 
-// A string containing the escaped PSSH box (for use with a MediaInfo proto).
-// This is a full v0 PSSH box with the Widevine system ID and the PSSH data
-// 'pssh'
-const char kExpectedDefaultPsshBox[] =
-  "\\000\\000\\000$pssh\\000\\000\\000\\000\\000\\001\\002\\003\\004\\005"
-  "\\006\\007\\010\\t\\n\\013\\014\\r\\016\\017\\000\\000\\000\\004pssh";
+const char kExpectedDefaultPsshBox[] = "expected_pssh_box";
 const char kExpectedDefaultMediaInfo[] =
-    "bandwidth: 7620\n"
     "video_info {\n"
     "  codec: 'avc1.010101'\n"
     "  width: 720\n"
@@ -72,20 +66,21 @@ struct VideoStreamInfoParameters {
   bool is_encrypted;
 };
 
+struct OnNewSegmentParameters {
+  std::string file_name;
+  uint64_t start_time;
+  uint64_t duration;
+  uint64_t segment_file_size;
+};
+
 // Note that this does not have vector of StreamInfo pointer.
 struct OnMediaEndParameters {
-  bool has_init_range;
-  uint64_t init_range_start;
-  uint64_t init_range_end;
-  bool has_index_range;
-  uint64_t index_range_start;
-  uint64_t index_range_end;
+  MuxerListener::MediaRanges media_ranges;
   float duration_seconds;
-  uint64_t file_size;
 };
 
 // Creates StreamInfo instance from VideoStreamInfoParameters.
-scoped_refptr<StreamInfo> CreateVideoStreamInfo(
+std::shared_ptr<StreamInfo> CreateVideoStreamInfo(
     const VideoStreamInfoParameters& param);
 
 // Returns the "default" VideoStreamInfoParameters for testing.
@@ -98,16 +93,10 @@ OnMediaEndParameters GetDefaultOnMediaEndParams();
 std::vector<ProtectionSystemSpecificInfo> GetDefaultKeySystemInfo();
 
 // Sets "default" values for muxer_options for testing.
-void SetDefaultMuxerOptionsValues(MuxerOptions* muxer_options);
-
-// Expect that expect and actual are equal.
-void ExpectMediaInfoEqual(const MediaInfo& expect, const MediaInfo& actual);
-
-// Returns true if expect and actual are equal.
-bool MediaInfoEqual(const MediaInfo& expect, const MediaInfo& actual);
+void SetDefaultMuxerOptions(MuxerOptions* muxer_options);
 
 }  // namespace media
 
 }  // namespace shaka
 
-#endif  // MEDIA_EVENT_MUXER_LISTENER_TEST_HELPER_H_
+#endif  // PACKAGER_MEDIA_EVENT_MUXER_LISTENER_TEST_HELPER_H_

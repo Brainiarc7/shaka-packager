@@ -4,14 +4,15 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_CODECS_AVC_DECODER_CONFIGURATION_RECORD_H_
-#define MEDIA_CODECS_AVC_DECODER_CONFIGURATION_RECORD_H_
+#ifndef PACKAGER_MEDIA_CODECS_AVC_DECODER_CONFIGURATION_RECORD_H_
+#define PACKAGER_MEDIA_CODECS_AVC_DECODER_CONFIGURATION_RECORD_H_
 
 #include <stdint.h>
 #include <string>
 #include <vector>
 
 #include "packager/base/macros.h"
+#include "packager/media/base/fourccs.h"
 #include "packager/media/codecs/decoder_configuration_record.h"
 
 namespace shaka {
@@ -24,7 +25,7 @@ class AVCDecoderConfigurationRecord : public DecoderConfigurationRecord {
   ~AVCDecoderConfigurationRecord() override;
 
   /// @return The codec string.
-  std::string GetCodecString() const;
+  std::string GetCodecString(FourCC codec_fourcc) const;
 
   uint8_t version() const { return version_; }
   uint8_t profile_indication() const { return profile_indication_; }
@@ -37,7 +38,8 @@ class AVCDecoderConfigurationRecord : public DecoderConfigurationRecord {
 
   /// Static version of GetCodecString.
   /// @return The codec string.
-  static std::string GetCodecString(uint8_t profile_indication,
+  static std::string GetCodecString(FourCC codec_fourcc,
+                                    uint8_t profile_indication,
                                     uint8_t profile_compatibility,
                                     uint8_t avc_level);
 
@@ -61,4 +63,4 @@ class AVCDecoderConfigurationRecord : public DecoderConfigurationRecord {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_CODECS_AVC_DECODER_CONFIGURATION_RECORD_H_
+#endif  // PACKAGER_MEDIA_CODECS_AVC_DECODER_CONFIGURATION_RECORD_H_

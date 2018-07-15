@@ -4,11 +4,12 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_FORMATS_MP4_MP4_MUXER_H_
-#define MEDIA_FORMATS_MP4_MP4_MUXER_H_
+#ifndef PACKAGER_MEDIA_FORMATS_MP4_MP4_MUXER_H_
+#define PACKAGER_MEDIA_FORMATS_MP4_MP4_MUXER_H_
 
 #include <vector>
 
+#include "packager/base/optional.h"
 #include "packager/media/base/muxer.h"
 
 namespace shaka {
@@ -16,6 +17,7 @@ namespace media {
 
 class AudioStreamInfo;
 class StreamInfo;
+class TextStreamInfo;
 class VideoStreamInfo;
 
 namespace mp4 {
@@ -35,27 +37,31 @@ class MP4Muxer : public Muxer {
 
  private:
   // Muxer implementation overrides.
-  Status Initialize() override;
+  Status InitializeMuxer() override;
   Status Finalize() override;
-  Status DoAddSample(const MediaStream* stream,
-                     scoped_refptr<MediaSample> sample) override;
+  Status AddSample(size_t stream_id, const MediaSample& sample) override;
+  Status FinalizeSegment(size_t stream_id,
+                         const SegmentInfo& segment_info) override;
 
   // Generate Audio/Video Track box.
   void InitializeTrak(const StreamInfo* info, Track* trak);
-  void GenerateAudioTrak(const AudioStreamInfo* audio_info,
+  bool GenerateAudioTrak(const AudioStreamInfo* audio_info,
                          Track* trak,
                          uint32_t track_id);
-  void GenerateVideoTrak(const VideoStreamInfo* video_info,
+  bool GenerateVideoTrak(const VideoStreamInfo* video_info,
                          Track* trak,
                          uint32_t track_id);
+  bool GenerateTextTrak(const TextStreamInfo* video_info,
+                        Track* trak,
+                        uint32_t track_id);
 
   // Gets |start| and |end| initialization range. Returns true if there is an
   // init range and sets start-end byte-range-spec specified in RFC2616.
-  bool GetInitRangeStartAndEnd(uint32_t* start, uint32_t* end);
+  base::Optional<Range> GetInitRangeStartAndEnd();
 
   // Gets |start| and |end| index range. Returns true if there is an index range
   // and sets start-end byte-range-spec specified in RFC2616.
-  bool GetIndexRangeStartAndEnd(uint32_t* start, uint32_t* end);
+  base::Optional<Range> GetIndexRangeStartAndEnd();
 
   // Fire events if there are no errors and Muxer::muxer_listener() is not NULL.
   void FireOnMediaStartEvent();
@@ -73,4 +79,4 @@ class MP4Muxer : public Muxer {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_FORMATS_MP4_MP4_MUXER_H_
+#endif  // PACKAGER_MEDIA_FORMATS_MP4_MP4_MUXER_H_

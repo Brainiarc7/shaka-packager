@@ -7,45 +7,29 @@
 #include <gflags/gflags.h>
 #include <iostream>
 
-#include "packager/app/fixed_key_encryption_flags.h"
+#include "packager/app/ad_cue_generator_flags.h"
+#include "packager/app/crypto_flags.h"
 #include "packager/app/hls_flags.h"
-#include "packager/app/libcrypto_threading.h"
+#include "packager/app/manifest_flags.h"
 #include "packager/app/mpd_flags.h"
 #include "packager/app/muxer_flags.h"
 #include "packager/app/packager_util.h"
+#include "packager/app/playready_key_encryption_flags.h"
+#include "packager/app/protection_system_flags.h"
+#include "packager/app/raw_key_encryption_flags.h"
 #include "packager/app/stream_descriptor.h"
 #include "packager/app/vlog_flags.h"
 #include "packager/app/widevine_encryption_flags.h"
-#include "packager/base/at_exit.h"
 #include "packager/base/command_line.h"
-#include "packager/base/files/file_path.h"
 #include "packager/base/logging.h"
-#include "packager/base/path_service.h"
-#include "packager/base/stl_util.h"
+#include "packager/base/optional.h"
+#include "packager/base/strings/string_number_conversions.h"
 #include "packager/base/strings/string_split.h"
+#include "packager/base/strings/string_util.h"
 #include "packager/base/strings/stringprintf.h"
-#include "packager/base/threading/simple_thread.h"
-#include "packager/base/time/clock.h"
-#include "packager/hls/base/hls_notifier.h"
-#include "packager/hls/base/simple_hls_notifier.h"
-#include "packager/media/base/container_names.h"
-#include "packager/media/base/demuxer.h"
-#include "packager/media/base/fourccs.h"
-#include "packager/media/base/key_source.h"
-#include "packager/media/base/muxer_options.h"
-#include "packager/media/base/muxer_util.h"
-#include "packager/media/event/hls_notify_muxer_listener.h"
-#include "packager/media/event/mpd_notify_muxer_listener.h"
-#include "packager/media/event/vod_media_info_dump_muxer_listener.h"
-#include "packager/media/file/file.h"
-#include "packager/media/formats/mp2t/ts_muxer.h"
-#include "packager/media/formats/mp4/mp4_muxer.h"
-#include "packager/media/formats/webm/webm_muxer.h"
-#include "packager/mpd/base/dash_iop_mpd_notifier.h"
-#include "packager/mpd/base/media_info.pb.h"
-#include "packager/mpd/base/mpd_builder.h"
-#include "packager/mpd/base/simple_mpd_notifier.h"
-#include "packager/version/version.h"
+#include "packager/file/file.h"
+#include "packager/packager.h"
+#include "packager/tools/license_notice.h"
 
 #if defined(OS_WIN)
 #include <codecvt>
@@ -53,61 +37,76 @@
 #include <locale>
 #endif  // defined(OS_WIN)
 
+DEFINE_bool(dump_stream_info, false, "Dump demuxed stream info.");
+DEFINE_bool(licenses, false, "Dump licenses.");
 DEFINE_bool(use_fake_clock_for_muxer,
             false,
             "Set to true to use a fake clock for muxer. With this flag set, "
             "creation time and modification time in outputs are set to 0. "
             "Should only be used for testing.");
-DEFINE_bool(override_version,
-            false,
-            "Override packager version in the generated outputs with "
-            "--test_version if it is set to true. Should be used for "
-            "testing only.");
-DEFINE_string(test_version,
+DEFINE_string(test_packager_version,
               "",
-              "Packager version for testing. Ignored if --override_version is "
-              "false. Should be used for testing only.");
+              "Packager version for testing. Should be used for testing only.");
 
 namespace shaka {
-namespace media {
 namespace {
 
 const char kUsage[] =
-    "Packager driver program. Usage:\n\n"
-    "%s [flags] <stream_descriptor> ...\n"
-    "stream_descriptor consists of comma separated field_name/value pairs:\n"
-    "field_name=value,[field_name=value,]...\n"
-    "Supported field names are as follows:\n"
+    "%s [flags] <stream_descriptor> ...\n\n"
+    "  stream_descriptor consists of comma separated field_name/value pairs:\n"
+    "  field_name=value,[field_name=value,]...\n"
+    "  Supported field names are as follows (names in parenthesis are alias):\n"
     "  - input (in): Required input/source media file path or network stream\n"
     "    URL.\n"
     "  - stream_selector (stream): Required field with value 'audio',\n"
-    "    'video', or stream number (zero based).\n"
-    "  - output (out): Required output file (single file) or initialization\n"
-    "    file path (multiple file).\n"
+    "    'video', 'text', or stream number (zero based).\n"
+    "  - output (out,init_segment): Required output file (single file) or\n"
+    "    initialization file path (multiple file).\n"
     "  - segment_template (segment): Optional value which specifies the\n"
     "    naming  pattern for the segment files, and that the stream should be\n"
     "    split into multiple files. Its presence should be consistent across\n"
     "    streams.\n"
     "  - bandwidth (bw): Optional value which contains a user-specified\n"
-    "    content bit rate for the stream, in bits/sec. If specified, this\n"
-    "    value is propagated to the $Bandwidth$ template parameter for\n"
-    "    segment names. If not specified, its value may be estimated.\n"
+    "    maximum bit rate for the stream, in bits/sec. If specified, this\n"
+    "    value is propagated to (HLS) EXT-X-STREAM-INF:BANDWIDTH or (DASH)\n"
+    "    Representation@bandwidth and the $Bandwidth$ template parameter for\n"
+    "    segment names. If not specified, the bandwidth value is estimated\n"
+    "    from content bitrate. Note that it only affects the generated\n"
+    "    manifests/playlists; it has no effect on the media content itself.\n"
     "  - language (lang): Optional value which contains a user-specified\n"
     "    language tag. If specified, this value overrides any language\n"
-    "    metadata in the input track.\n"
+    "    metadata in the input stream.\n"
     "  - output_format (format): Optional value which specifies the format\n"
     "    of the output files (MP4 or WebM).  If not specified, it will be\n"
     "    derived from the file extension of the output file.\n"
-    "  - hls_name: Required for audio when outputting HLS.\n"
-    "    name of the output stream. This is not (necessarily) the same as\n"
-    "    output. This is used as the NAME attribute for EXT-X-MEDIA\n"
-    "  - hls_group_id: Required for audio when outputting HLS.\n"
-    "    The group ID for the output stream. For HLS this is used as the\n"
-    "    GROUP-ID attribute for EXT-X-MEDIA.\n"
-    "  - playlist_name: Required for HLS output.\n"
-    "    Name of the playlist for the stream. Usually ends with '.m3u8'.\n";
+    "  - skip_encryption=0|1: Optional. Defaults to 0 if not specified. If\n"
+    "    it is set to 1, no encryption of the stream will be made.\n"
+    "  - drm_label: Optional value for custom DRM label, which defines the\n"
+    "    encryption key applied to the stream. Typical values include AUDIO,\n"
+    "    SD, HD, UHD1, UHD2. For raw key, it should be a label defined in\n"
+    "    --keys. If not provided, the DRM label is derived from stream type\n"
+    "    (video, audio), resolution, etc.\n"
+    "    Note that it is case sensitive.\n"
+    "  - trick_play_factor (tpf): Optional value which specifies the trick\n"
+    "    play, a.k.a. trick mode, stream sampling rate among key frames.\n"
+    "    If specified, the output is a trick play stream.\n"
+    "  - hls_name: Used for HLS audio to set the NAME attribute for\n"
+    "    EXT-X-MEDIA. Defaults to the base of the playlist name.\n"
+    "  - hls_group_id: Used for HLS audio to set the GROUP-ID attribute for\n"
+    "    EXT-X-MEDIA. Defaults to 'audio' if not specified.\n"
+    "  - playlist_name: The HLS playlist file to create. Usually ends with\n"
+    "    '.m3u8', and is relative to --hls_master_playlist_output. If\n"
+    "    unspecified, defaults to something of the form 'stream_0.m3u8',\n"
+    "    'stream_1.m3u8', 'stream_2.m3u8', etc.\n"
+    "  - iframe_playlist_name: The optional HLS I-Frames only playlist file\n"
+    "    to create. Usually ends with '.m3u8', and is relative to\n"
+    "    hls_master_playlist_output. Should only be set for video streams. If\n"
+    "    unspecified, no I-Frames only playlist is created.\n";
 
-const char kMediaInfoSuffix[] = ".media_info";
+// Labels for parameters in RawKey key info.
+const char kDrmLabelLabel[] = "label";
+const char kKeyIdLabel[] = "key_id";
+const char kKeyLabel[] = "key";
 
 enum ExitStatus {
   kSuccess = 0,
@@ -116,456 +115,381 @@ enum ExitStatus {
   kInternalError,
 };
 
-// TODO(rkuroiwa): Write TTML and WebVTT parser (demuxing) for a better check
-// and for supporting live/segmenting (muxing).  With a demuxer and a muxer,
-// CreateRemuxJobs() shouldn't treat text as a special case.
-std::string DetermineTextFileFormat(const std::string& file) {
-  std::string content;
-  if (!File::ReadFileToString(file.c_str(), &content)) {
-    LOG(ERROR) << "Failed to open file " << file
-               << " to determine file format.";
-    return "";
+bool GetWidevineSigner(WidevineSigner* signer) {
+  signer->signer_name = FLAGS_signer;
+  if (!FLAGS_aes_signing_key_bytes.empty()) {
+    signer->signing_key_type = WidevineSigner::SigningKeyType::kAes;
+    signer->aes.key = FLAGS_aes_signing_key_bytes;
+    signer->aes.iv = FLAGS_aes_signing_iv_bytes;
+  } else if (!FLAGS_rsa_signing_key_path.empty()) {
+    signer->signing_key_type = WidevineSigner::SigningKeyType::kRsa;
+    if (!File::ReadFileToString(FLAGS_rsa_signing_key_path.c_str(),
+                                &signer->rsa.key)) {
+      LOG(ERROR) << "Failed to read from '" << FLAGS_rsa_signing_key_path
+                 << "'.";
+      return false;
+    }
   }
-  MediaContainerName container_name = DetermineContainer(
-      reinterpret_cast<const uint8_t*>(content.data()), content.size());
-  if (container_name == CONTAINER_WEBVTT) {
-    return "vtt";
-  } else if (container_name == CONTAINER_TTML) {
-    return "ttml";
-  }
-
-  return "";
-}
-
-FourCC GetProtectionScheme(const std::string& protection_scheme) {
-  if (protection_scheme == "cenc") {
-    return FOURCC_cenc;
-  } else if (protection_scheme == "cens") {
-    return FOURCC_cens;
-  } else if (protection_scheme == "cbc1") {
-    return FOURCC_cbc1;
-  } else if (protection_scheme == "cbcs") {
-    return FOURCC_cbcs;
-  } else {
-    LOG(ERROR) << "Unknown protection scheme: " << protection_scheme;
-    return FOURCC_NULL;
-  }
-}
-
-}  // namespace
-
-// A fake clock that always return time 0 (epoch). Should only be used for
-// testing.
-class FakeClock : public base::Clock {
- public:
-  base::Time Now() override { return base::Time(); }
-};
-
-// Demux, Mux(es) and worker thread used to remux a source file/stream.
-class RemuxJob : public base::SimpleThread {
- public:
-  RemuxJob(std::unique_ptr<Demuxer> demuxer)
-      : SimpleThread("RemuxJob"), demuxer_(std::move(demuxer)) {}
-
-  ~RemuxJob() override {
-    STLDeleteElements(&muxers_);
-  }
-
-  void AddMuxer(std::unique_ptr<Muxer> mux) {
-    muxers_.push_back(mux.release());
-  }
-
-  Demuxer* demuxer() { return demuxer_.get(); }
-  Status status() { return status_; }
-
- private:
-  void Run() override {
-    DCHECK(demuxer_);
-    status_ = demuxer_->Run();
-  }
-
-  std::unique_ptr<Demuxer> demuxer_;
-  std::vector<Muxer*> muxers_;
-  Status status_;
-
-  DISALLOW_COPY_AND_ASSIGN(RemuxJob);
-};
-
-bool StreamInfoToTextMediaInfo(const StreamDescriptor& stream_descriptor,
-                               const MuxerOptions& stream_muxer_options,
-                               MediaInfo* text_media_info) {
-  const std::string& language = stream_descriptor.language;
-  std::string format = DetermineTextFileFormat(stream_descriptor.input);
-  if (format.empty()) {
-    LOG(ERROR) << "Failed to determine the text file format for "
-               << stream_descriptor.input;
-    return false;
-  }
-
-  if (!File::Copy(stream_descriptor.input.c_str(),
-                  stream_muxer_options.output_file_name.c_str())) {
-    LOG(ERROR) << "Failed to copy the input file (" << stream_descriptor.input
-               << ") to output file (" << stream_muxer_options.output_file_name
-               << ").";
-    return false;
-  }
-
-  text_media_info->set_media_file_name(stream_muxer_options.output_file_name);
-  text_media_info->set_container_type(MediaInfo::CONTAINER_TEXT);
-
-  if (stream_muxer_options.bandwidth != 0) {
-    text_media_info->set_bandwidth(stream_muxer_options.bandwidth);
-  } else {
-    // Text files are usually small and since the input is one file; there's no
-    // way for the player to do ranged requests. So set this value to something
-    // reasonable.
-    text_media_info->set_bandwidth(256);
-  }
-
-  MediaInfo::TextInfo* text_info = text_media_info->mutable_text_info();
-  text_info->set_format(format);
-  if (!language.empty())
-    text_info->set_language(language);
-
   return true;
 }
 
-std::unique_ptr<Muxer> CreateOutputMuxer(const MuxerOptions& options,
-                                         MediaContainerName container) {
-  if (container == CONTAINER_WEBM) {
-    return std::unique_ptr<Muxer>(new webm::WebMMuxer(options));
-  } else if (container == CONTAINER_MPEG2TS) {
-    return std::unique_ptr<Muxer>(new mp2t::TsMuxer(options));
+bool GetHlsPlaylistType(const std::string& playlist_type,
+                        HlsPlaylistType* playlist_type_enum) {
+  if (base::ToUpperASCII(playlist_type) == "VOD") {
+    *playlist_type_enum = HlsPlaylistType::kVod;
+  } else if (base::ToUpperASCII(playlist_type) == "LIVE") {
+    *playlist_type_enum = HlsPlaylistType::kLive;
+  } else if (base::ToUpperASCII(playlist_type) == "EVENT") {
+    *playlist_type_enum = HlsPlaylistType::kEvent;
   } else {
-    DCHECK_EQ(container, CONTAINER_MOV);
-    return std::unique_ptr<Muxer>(new mp4::MP4Muxer(options));
+    LOG(ERROR) << "Unrecognized playlist type " << playlist_type;
+    return false;
   }
-}
-
-bool CreateRemuxJobs(const StreamDescriptorList& stream_descriptors,
-                     const MuxerOptions& muxer_options,
-                     FakeClock* fake_clock,
-                     KeySource* key_source,
-                     MpdNotifier* mpd_notifier,
-                     hls::HlsNotifier* hls_notifier,
-                     std::vector<RemuxJob*>* remux_jobs) {
-  // No notifiers OR (mpd_notifier XOR hls_notifier); which is NAND.
-  DCHECK(!(mpd_notifier && hls_notifier));
-  DCHECK(remux_jobs);
-
-  std::string previous_input;
-  int stream_number = 0;
-  for (StreamDescriptorList::const_iterator
-           stream_iter = stream_descriptors.begin();
-       stream_iter != stream_descriptors.end();
-       ++stream_iter, ++stream_number) {
-    // Process stream descriptor.
-    MuxerOptions stream_muxer_options(muxer_options);
-    stream_muxer_options.output_file_name = stream_iter->output;
-    if (!stream_iter->segment_template.empty()) {
-      if (!ValidateSegmentTemplate(stream_iter->segment_template)) {
-        LOG(ERROR) << "ERROR: segment template with '"
-                   << stream_iter->segment_template << "' is invalid.";
-        return false;
-      }
-      stream_muxer_options.segment_template = stream_iter->segment_template;
-      if (stream_muxer_options.single_segment) {
-        LOG(WARNING) << "Segment template and single segment are incompatible, "
-                        "setting single segment to false.";
-        stream_muxer_options.single_segment = false;
-      }
-    }
-    stream_muxer_options.bandwidth = stream_iter->bandwidth;
-
-    // Handle text input.
-    if (stream_iter->stream_selector == "text") {
-      MediaInfo text_media_info;
-      if (!StreamInfoToTextMediaInfo(*stream_iter, stream_muxer_options,
-                                     &text_media_info)) {
-        return false;
-      }
-
-      if (mpd_notifier) {
-        uint32_t unused;
-        if (!mpd_notifier->NotifyNewContainer(text_media_info, &unused)) {
-          LOG(ERROR) << "Failed to process text file " << stream_iter->input;
-        } else {
-          mpd_notifier->Flush();
-        }
-      } else if (FLAGS_output_media_info) {
-        VodMediaInfoDumpMuxerListener::WriteMediaInfoToFile(
-            text_media_info,
-            stream_muxer_options.output_file_name + kMediaInfoSuffix);
-      } else {
-        NOTIMPLEMENTED()
-            << "--mpd_output or --output_media_info flags are "
-               "required for text output. Skipping manifest related output for "
-            << stream_iter->input;
-      }
-      continue;
-    }
-
-    if (stream_iter->input != previous_input) {
-      // New remux job needed. Create demux and job thread.
-      std::unique_ptr<Demuxer> demuxer(new Demuxer(stream_iter->input));
-      if (FLAGS_enable_widevine_decryption ||
-          FLAGS_enable_fixed_key_decryption) {
-        std::unique_ptr<KeySource> key_source(CreateDecryptionKeySource());
-        if (!key_source)
-          return false;
-        demuxer->SetKeySource(std::move(key_source));
-      }
-      Status status = demuxer->Initialize();
-      if (!status.ok()) {
-        LOG(ERROR) << "Demuxer failed to initialize: " << status.ToString();
-        return false;
-      }
-      if (FLAGS_dump_stream_info) {
-        printf("\nFile \"%s\":\n", stream_iter->input.c_str());
-        DumpStreamInfo(demuxer->streams());
-        if (stream_iter->output.empty())
-          continue;  // just need stream info.
-      }
-      remux_jobs->push_back(new RemuxJob(std::move(demuxer)));
-      previous_input = stream_iter->input;
-    }
-    DCHECK(!remux_jobs->empty());
-
-    std::unique_ptr<Muxer> muxer(
-        CreateOutputMuxer(stream_muxer_options, stream_iter->output_format));
-    if (FLAGS_use_fake_clock_for_muxer) muxer->set_clock(fake_clock);
-
-    if (key_source) {
-      muxer->SetKeySource(key_source,
-                          FLAGS_max_sd_pixels,
-                          FLAGS_clear_lead,
-                          FLAGS_crypto_period_duration,
-                          GetProtectionScheme(FLAGS_protection_scheme));
-    }
-
-    std::unique_ptr<MuxerListener> muxer_listener;
-    DCHECK(!(FLAGS_output_media_info && mpd_notifier));
-    if (FLAGS_output_media_info) {
-      const std::string output_media_info_file_name =
-          stream_muxer_options.output_file_name + kMediaInfoSuffix;
-      std::unique_ptr<VodMediaInfoDumpMuxerListener>
-          vod_media_info_dump_muxer_listener(
-              new VodMediaInfoDumpMuxerListener(output_media_info_file_name));
-      muxer_listener = std::move(vod_media_info_dump_muxer_listener);
-    }
-    if (mpd_notifier) {
-      std::unique_ptr<MpdNotifyMuxerListener> mpd_notify_muxer_listener(
-          new MpdNotifyMuxerListener(mpd_notifier));
-      muxer_listener = std::move(mpd_notify_muxer_listener);
-    }
-
-    if (hls_notifier) {
-      // TODO(rkuroiwa): Do some smart stuff to group the audios, e.g. detect
-      // languages.
-      std::string group_id = stream_iter->hls_group_id;
-      std::string name = stream_iter->hls_name;
-      std::string hls_playlist_name = stream_iter->hls_playlist_name;
-      if (group_id.empty())
-        group_id = "audio";
-      if (name.empty())
-        name = base::StringPrintf("stream_%d", stream_number);
-      if (hls_playlist_name.empty())
-        hls_playlist_name = base::StringPrintf("stream_%d.m3u8", stream_number);
-
-      muxer_listener.reset(new HlsNotifyMuxerListener(hls_playlist_name, name,
-                                                      group_id, hls_notifier));
-    }
-
-    if (muxer_listener)
-      muxer->SetMuxerListener(std::move(muxer_listener));
-
-    if (!AddStreamToMuxer(remux_jobs->back()->demuxer()->streams(),
-                          stream_iter->stream_selector,
-                          stream_iter->language,
-                          muxer.get())) {
-      return false;
-    }
-    remux_jobs->back()->AddMuxer(std::move(muxer));
-  }
-
   return true;
 }
 
-Status RunRemuxJobs(const std::vector<RemuxJob*>& remux_jobs) {
-  // Start the job threads.
-  for (std::vector<RemuxJob*>::const_iterator job_iter = remux_jobs.begin();
-       job_iter != remux_jobs.end();
-       ++job_iter) {
-    (*job_iter)->Start();
+bool GetProtectionScheme(uint32_t* protection_scheme) {
+  if (FLAGS_protection_scheme == "cenc") {
+    *protection_scheme = EncryptionParams::kProtectionSchemeCenc;
+    return true;
   }
-
-  // Wait for all jobs to complete or an error occurs.
-  Status status;
-  bool all_joined;
-  do {
-    all_joined = true;
-    for (std::vector<RemuxJob*>::const_iterator job_iter = remux_jobs.begin();
-         job_iter != remux_jobs.end();
-         ++job_iter) {
-      if ((*job_iter)->HasBeenJoined()) {
-        status = (*job_iter)->status();
-        if (!status.ok())
-          break;
-      } else {
-        all_joined = false;
-        (*job_iter)->Join();
-      }
-    }
-  } while (!all_joined && status.ok());
-
-  return status;
+  if (FLAGS_protection_scheme == "cbc1") {
+    *protection_scheme = EncryptionParams::kProtectionSchemeCbc1;
+    return true;
+  }
+  if (FLAGS_protection_scheme == "cbcs") {
+    *protection_scheme = EncryptionParams::kProtectionSchemeCbcs;
+    return true;
+  }
+  if (FLAGS_protection_scheme == "cens") {
+    *protection_scheme = EncryptionParams::kProtectionSchemeCens;
+    return true;
+  }
+  LOG(ERROR) << "Unrecognized protection_scheme " << FLAGS_protection_scheme;
+  return false;
 }
 
-bool RunPackager(const StreamDescriptorList& stream_descriptors) {
-  const FourCC protection_scheme = GetProtectionScheme(FLAGS_protection_scheme);
-  if (protection_scheme == FOURCC_NULL)
-    return false;
+bool ParseKeys(const std::string& keys, RawKeyParams* raw_key) {
+  for (const std::string& key_data : base::SplitString(
+           keys, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
+    base::StringPairs string_pairs;
+    base::SplitStringIntoKeyValuePairs(key_data, '=', ':', &string_pairs);
 
-  if (!AssignFlagsFromProfile())
-    return false;
-
-  if (FLAGS_output_media_info && !FLAGS_mpd_output.empty()) {
-    NOTIMPLEMENTED() << "ERROR: --output_media_info and --mpd_output do not "
-                        "work together.";
-    return false;
-  }
-  if (FLAGS_output_media_info && !FLAGS_single_segment) {
-    // TODO(rkuroiwa, kqyang): Support partial media info dump for live.
-    NOTIMPLEMENTED() << "ERROR: --output_media_info is only supported if "
-                        "--single_segment is true.";
-    return false;
-  }
-
-  // Since there isn't a muxer listener that can output both MPD and HLS,
-  // disallow specifying both MPD and HLS flags.
-  if (!FLAGS_mpd_output.empty() && !FLAGS_hls_master_playlist_output.empty()) {
-    LOG(ERROR) << "Cannot output both MPD and HLS.";
-    return false;
-  }
-
-  // Get basic muxer options.
-  MuxerOptions muxer_options;
-  if (!GetMuxerOptions(&muxer_options))
-    return false;
-
-  MpdOptions mpd_options;
-  if (!GetMpdOptions(&mpd_options))
-    return false;
-
-  // Create encryption key source if needed.
-  std::unique_ptr<KeySource> encryption_key_source;
-  if (FLAGS_enable_widevine_encryption || FLAGS_enable_fixed_key_encryption) {
-    encryption_key_source = CreateEncryptionKeySource();
-    if (!encryption_key_source)
+    std::map<std::string, std::string> value_map;
+    for (const auto& string_pair : string_pairs)
+      value_map[string_pair.first] = string_pair.second;
+    const std::string drm_label = value_map[kDrmLabelLabel];
+    if (raw_key->key_map.find(drm_label) != raw_key->key_map.end()) {
+      LOG(ERROR) << "Seeing duplicated DRM label '" << drm_label << "'.";
       return false;
-  }
-
-  std::unique_ptr<MpdNotifier> mpd_notifier;
-  if (!FLAGS_mpd_output.empty()) {
-    DashProfile profile =
-        FLAGS_single_segment ? kOnDemandProfile : kLiveProfile;
-    std::vector<std::string> base_urls = base::SplitString(
-        FLAGS_base_urls, ",", base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-    if (FLAGS_generate_dash_if_iop_compliant_mpd) {
-      mpd_notifier.reset(new DashIopMpdNotifier(profile, mpd_options, base_urls,
-                                                FLAGS_mpd_output));
-    } else {
-      mpd_notifier.reset(new SimpleMpdNotifier(profile, mpd_options, base_urls,
-                                               FLAGS_mpd_output));
     }
-    if (!mpd_notifier->Init()) {
-      LOG(ERROR) << "MpdNotifier failed to initialize.";
+    auto& key_info = raw_key->key_map[drm_label];
+    if (value_map[kKeyIdLabel].empty() ||
+        !base::HexStringToBytes(value_map[kKeyIdLabel], &key_info.key_id)) {
+      LOG(ERROR) << "Empty key id or invalid hex string for key id: "
+                 << value_map[kKeyIdLabel];
+      return false;
+    }
+    if (value_map[kKeyLabel].empty() ||
+        !base::HexStringToBytes(value_map[kKeyLabel], &key_info.key)) {
+      LOG(ERROR) << "Empty key or invalid hex string for key: "
+                 << value_map[kKeyLabel];
       return false;
     }
   }
-
-  std::unique_ptr<hls::HlsNotifier> hls_notifier;
-  if (!FLAGS_hls_master_playlist_output.empty()) {
-    base::FilePath master_playlist_path(
-        base::FilePath::FromUTF8Unsafe(FLAGS_hls_master_playlist_output));
-    base::FilePath master_playlist_name = master_playlist_path.BaseName();
-
-    hls_notifier.reset(new hls::SimpleHlsNotifier(
-        hls::HlsNotifier::HlsProfile::kOnDemandProfile, FLAGS_hls_base_url,
-        master_playlist_path.DirName().AsEndingWithSeparator().AsUTF8Unsafe(),
-        master_playlist_name.AsUTF8Unsafe()));
-  }
-
-  std::vector<RemuxJob*> remux_jobs;
-  STLElementDeleter<std::vector<RemuxJob*> > scoped_jobs_deleter(&remux_jobs);
-  FakeClock fake_clock;
-  if (!CreateRemuxJobs(stream_descriptors, muxer_options, &fake_clock,
-                       encryption_key_source.get(), mpd_notifier.get(),
-                       hls_notifier.get(), &remux_jobs)) {
-    return false;
-  }
-
-  Status status = RunRemuxJobs(remux_jobs);
-  if (!status.ok()) {
-    LOG(ERROR) << "Packaging Error: " << status.ToString();
-    return false;
-  }
-
-  if (hls_notifier) {
-    if (!hls_notifier->Flush())
-      return false;
-  }
-  if (mpd_notifier) {
-    if (!mpd_notifier->Flush())
-      return false;
-  }
-
-  printf("Packaging completed successfully.\n");
   return true;
+}
+
+bool GetRawKeyParams(RawKeyParams* raw_key) {
+  raw_key->iv = FLAGS_iv_bytes;
+  raw_key->pssh = FLAGS_pssh_bytes;
+  if (!FLAGS_keys.empty()) {
+    if (!ParseKeys(FLAGS_keys, raw_key)) {
+      LOG(ERROR) << "Failed to parse --keys " << FLAGS_keys;
+      return false;
+    }
+  } else {
+    // An empty StreamLabel specifies the default key info.
+    RawKeyParams::KeyInfo& key_info = raw_key->key_map[""];
+    key_info.key_id = FLAGS_key_id_bytes;
+    key_info.key = FLAGS_key_bytes;
+  }
+  return true;
+}
+
+bool ParseAdCues(const std::string& ad_cues, std::vector<Cuepoint>* cuepoints) {
+  // Track if optional field is supplied consistently across all cue points.
+  size_t duration_count = 0;
+
+  for (const std::string& ad_cue : base::SplitString(
+           ad_cues, ";", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
+    Cuepoint cuepoint;
+    auto split_ad_cue = base::SplitString(ad_cue, ",", base::TRIM_WHITESPACE,
+                                          base::SPLIT_WANT_NONEMPTY);
+    if (split_ad_cue.size() > 2) {
+      LOG(ERROR) << "Failed to parse --ad_cues " << ad_cues
+                 << " Each ad cue must contain no more than 2 components.";
+    }
+    if (!base::StringToDouble(split_ad_cue.front(),
+                              &cuepoint.start_time_in_seconds)) {
+      LOG(ERROR) << "Failed to parse --ad_cues " << ad_cues
+                 << " Start time component must be of type double.";
+      return false;
+    }
+    if (split_ad_cue.size() > 1) {
+      duration_count++;
+      if (!base::StringToDouble(split_ad_cue[1],
+                                &cuepoint.duration_in_seconds)) {
+        LOG(ERROR) << "Failed to parse --ad_cues " << ad_cues
+                   << " Duration component must be of type double.";
+        return false;
+      }
+    }
+    cuepoints->push_back(cuepoint);
+  }
+
+  if (duration_count > 0 && duration_count != cuepoints->size()) {
+    LOG(ERROR) << "Failed to parse --ad_cues " << ad_cues
+               << " Duration component is optional. However if it is supplied,"
+               << " it must be supplied consistently across all cuepoints.";
+    return false;
+  }
+  return true;
+}
+
+base::Optional<PackagingParams> GetPackagingParams() {
+  PackagingParams packaging_params;
+
+  packaging_params.temp_dir = FLAGS_temp_dir;
+
+  AdCueGeneratorParams& ad_cue_generator_params =
+      packaging_params.ad_cue_generator_params;
+  if (!ParseAdCues(FLAGS_ad_cues, &ad_cue_generator_params.cue_points)) {
+    return base::nullopt;
+  }
+
+  ChunkingParams& chunking_params = packaging_params.chunking_params;
+  chunking_params.segment_duration_in_seconds = FLAGS_segment_duration;
+  chunking_params.subsegment_duration_in_seconds = FLAGS_fragment_duration;
+  chunking_params.segment_sap_aligned = FLAGS_segment_sap_aligned;
+  chunking_params.subsegment_sap_aligned = FLAGS_fragment_sap_aligned;
+
+  int num_key_providers = 0;
+  EncryptionParams& encryption_params = packaging_params.encryption_params;
+  encryption_params.generate_common_pssh = FLAGS_generate_common_pssh;
+  encryption_params.generate_playready_pssh = FLAGS_generate_playready_pssh;
+  encryption_params.generate_widevine_pssh = FLAGS_generate_widevine_pssh;
+  if (FLAGS_enable_widevine_encryption) {
+    encryption_params.key_provider = KeyProvider::kWidevine;
+    ++num_key_providers;
+  }
+  if (FLAGS_enable_playready_encryption) {
+    encryption_params.key_provider = KeyProvider::kPlayReady;
+    ++num_key_providers;
+  }
+  if (FLAGS_enable_raw_key_encryption) {
+    encryption_params.key_provider = KeyProvider::kRawKey;
+    ++num_key_providers;
+  }
+  if (num_key_providers > 1) {
+    LOG(ERROR) << "Only one of --enable_widevine_encryption, "
+                  "--enable_playready_encryption, "
+                  "--enable_raw_key_encryption can be enabled.";
+    return base::nullopt;
+  }
+
+  if (encryption_params.key_provider != KeyProvider::kNone) {
+    encryption_params.clear_lead_in_seconds = FLAGS_clear_lead;
+    if (!GetProtectionScheme(&encryption_params.protection_scheme))
+      return base::nullopt;
+    encryption_params.crypto_period_duration_in_seconds =
+        FLAGS_crypto_period_duration;
+    encryption_params.vp9_subsample_encryption = FLAGS_vp9_subsample_encryption;
+    encryption_params.stream_label_func = std::bind(
+        &Packager::DefaultStreamLabelFunction, FLAGS_max_sd_pixels,
+        FLAGS_max_hd_pixels, FLAGS_max_uhd1_pixels, std::placeholders::_1);
+  }
+  switch (encryption_params.key_provider) {
+    case KeyProvider::kWidevine: {
+      WidevineEncryptionParams& widevine = encryption_params.widevine;
+      widevine.key_server_url = FLAGS_key_server_url;
+
+      widevine.content_id = FLAGS_content_id_bytes;
+      widevine.policy = FLAGS_policy;
+      widevine.group_id = FLAGS_group_id_bytes;
+      widevine.enable_entitlement_license = FLAGS_enable_entitlement_license;
+      if (!GetWidevineSigner(&widevine.signer))
+        return base::nullopt;
+      break;
+    }
+    case KeyProvider::kPlayReady: {
+      PlayReadyEncryptionParams& playready = encryption_params.playready;
+      playready.key_server_url = FLAGS_playready_server_url;
+      playready.program_identifier = FLAGS_program_identifier;
+      playready.ca_file = FLAGS_ca_file;
+      playready.client_cert_file = FLAGS_client_cert_file;
+      playready.client_cert_private_key_file =
+          FLAGS_client_cert_private_key_file;
+      playready.client_cert_private_key_password =
+          FLAGS_client_cert_private_key_password;
+      break;
+    }
+    case KeyProvider::kRawKey: {
+      if (!GetRawKeyParams(&encryption_params.raw_key))
+        return base::nullopt;
+      break;
+    }
+    case KeyProvider::kNone:
+      break;
+  }
+
+  num_key_providers = 0;
+  DecryptionParams& decryption_params = packaging_params.decryption_params;
+  if (FLAGS_enable_widevine_decryption) {
+    decryption_params.key_provider = KeyProvider::kWidevine;
+    ++num_key_providers;
+  }
+  if (FLAGS_enable_raw_key_decryption) {
+    decryption_params.key_provider = KeyProvider::kRawKey;
+    ++num_key_providers;
+  }
+  if (num_key_providers > 1) {
+    LOG(ERROR) << "Only one of --enable_widevine_decryption, "
+                  "--enable_raw_key_decryption can be enabled.";
+    return base::nullopt;
+  }
+  switch (decryption_params.key_provider) {
+    case KeyProvider::kWidevine: {
+      WidevineDecryptionParams& widevine = decryption_params.widevine;
+      widevine.key_server_url = FLAGS_key_server_url;
+      if (!GetWidevineSigner(&widevine.signer))
+        return base::nullopt;
+      break;
+    }
+    case KeyProvider::kRawKey: {
+      if (!GetRawKeyParams(&decryption_params.raw_key))
+        return base::nullopt;
+      break;
+    }
+    case KeyProvider::kPlayReady:
+    case KeyProvider::kNone:
+      break;
+  }
+
+  Mp4OutputParams& mp4_params = packaging_params.mp4_output_params;
+  mp4_params.generate_sidx_in_media_segments =
+      FLAGS_generate_sidx_in_media_segments;
+  mp4_params.include_pssh_in_stream = FLAGS_mp4_include_pssh_in_stream;
+
+  packaging_params.output_media_info = FLAGS_output_media_info;
+
+  MpdParams& mpd_params = packaging_params.mpd_params;
+  mpd_params.mpd_output = FLAGS_mpd_output;
+  mpd_params.base_urls = base::SplitString(
+      FLAGS_base_urls, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+  mpd_params.min_buffer_time = FLAGS_min_buffer_time;
+  mpd_params.minimum_update_period = FLAGS_minimum_update_period;
+  mpd_params.suggested_presentation_delay = FLAGS_suggested_presentation_delay;
+  mpd_params.time_shift_buffer_depth = FLAGS_time_shift_buffer_depth;
+  mpd_params.preserved_segments_outside_live_window =
+      FLAGS_preserved_segments_outside_live_window;
+
+  if (!FLAGS_utc_timings.empty()) {
+    base::StringPairs pairs;
+    if (!base::SplitStringIntoKeyValuePairs(FLAGS_utc_timings, '=', ',',
+                                            &pairs)) {
+      LOG(ERROR) << "Invalid --utc_timings scheme_id_uri/value pairs.";
+      return base::nullopt;
+    }
+    for (const auto& string_pair : pairs) {
+      mpd_params.utc_timings.push_back({string_pair.first, string_pair.second});
+    }
+  }
+
+  mpd_params.default_language = FLAGS_default_language;
+  mpd_params.generate_static_live_mpd = FLAGS_generate_static_mpd;
+  mpd_params.generate_dash_if_iop_compliant_mpd =
+      FLAGS_generate_dash_if_iop_compliant_mpd;
+  mpd_params.allow_approximate_segment_timeline =
+      FLAGS_allow_approximate_segment_timeline;
+
+  HlsParams& hls_params = packaging_params.hls_params;
+  if (!GetHlsPlaylistType(FLAGS_hls_playlist_type, &hls_params.playlist_type)) {
+    return base::nullopt;
+  }
+  hls_params.master_playlist_output = FLAGS_hls_master_playlist_output;
+  hls_params.base_url = FLAGS_hls_base_url;
+  hls_params.key_uri = FLAGS_hls_key_uri;
+  hls_params.time_shift_buffer_depth = FLAGS_time_shift_buffer_depth;
+  hls_params.preserved_segments_outside_live_window =
+      FLAGS_preserved_segments_outside_live_window;
+  hls_params.default_language = FLAGS_default_language;
+
+  TestParams& test_params = packaging_params.test_params;
+  test_params.dump_stream_info = FLAGS_dump_stream_info;
+  test_params.inject_fake_clock = FLAGS_use_fake_clock_for_muxer;
+  if (!FLAGS_test_packager_version.empty())
+    test_params.injected_library_version = FLAGS_test_packager_version;
+
+  return packaging_params;
 }
 
 int PackagerMain(int argc, char** argv) {
-  base::AtExitManager exit;
   // Needed to enable VLOG/DVLOG through --vmodule or --v.
   base::CommandLine::Init(argc, argv);
 
   // Set up logging.
   logging::LoggingSettings log_settings;
-  base::FilePath log_filename;
-  PathService::Get(base::DIR_EXE, &log_filename);
-  log_filename = log_filename.AppendASCII("packager.log");
-  log_settings.logging_dest = logging::LOG_TO_ALL;
-  log_settings.log_file = log_filename.value().c_str();
-  log_settings.delete_old = logging::DELETE_OLD_LOG_FILE;
+  log_settings.logging_dest = logging::LOG_TO_SYSTEM_DEBUG_LOG;
   CHECK(logging::InitLogging(log_settings));
 
+  google::SetVersionString(shaka::Packager::GetLibraryVersion());
   google::SetUsageMessage(base::StringPrintf(kUsage, argv[0]));
   google::ParseCommandLineFlags(&argc, &argv, true);
+  if (FLAGS_licenses) {
+    for (const char* line : kLicenseNotice)
+      std::cout << line << std::endl;
+    return kSuccess;
+  }
   if (argc < 2) {
-    const std::string version_string = base::StringPrintf(
-        "shaka-packager version %s", GetPackagerVersion().c_str());
-    google::ShowUsageWithFlags(version_string.c_str());
+    google::ShowUsageWithFlags("Usage");
     return kSuccess;
   }
 
-  if (!ValidateWidevineCryptoFlags() || !ValidateFixedCryptoFlags())
+  if (!ValidateWidevineCryptoFlags() || !ValidateRawKeyCryptoFlags() ||
+      !ValidatePRCryptoFlags()) {
+    return kArgumentValidationFailed;
+  }
+
+  base::Optional<PackagingParams> packaging_params = GetPackagingParams();
+  if (!packaging_params)
     return kArgumentValidationFailed;
 
-  if (FLAGS_override_version)
-    SetPackagerVersionForTesting(FLAGS_test_version);
-
-  LibcryptoThreading libcrypto_threading;
-  // TODO(tinskip): Make InsertStreamDescriptor a member of
-  // StreamDescriptorList.
-  StreamDescriptorList stream_descriptors;
+  std::vector<StreamDescriptor> stream_descriptors;
   for (int i = 1; i < argc; ++i) {
-    if (!InsertStreamDescriptor(argv[i], &stream_descriptors))
+    base::Optional<StreamDescriptor> stream_descriptor =
+        ParseStreamDescriptor(argv[i]);
+    if (!stream_descriptor)
       return kArgumentValidationFailed;
+    stream_descriptors.push_back(stream_descriptor.value());
   }
-  return RunPackager(stream_descriptors) ? kSuccess : kPackagingFailed;
+  Packager packager;
+  Status status =
+      packager.Initialize(packaging_params.value(), stream_descriptors);
+  if (!status.ok()) {
+    LOG(ERROR) << "Failed to initialize packager: " << status.ToString();
+    return kArgumentValidationFailed;
+  }
+  status = packager.Run();
+  if (!status.ok()) {
+    LOG(ERROR) << "Packaging Error: " << status.ToString();
+    return kPackagingFailed;
+  }
+  printf("Packaging completed successfully.\n");
+  return kSuccess;
 }
 
-}  // namespace media
+}  // namespace
 }  // namespace shaka
 
 #if defined(OS_WIN)
@@ -587,10 +511,10 @@ int wmain(int argc, wchar_t* argv[], wchar_t* envp[]) {
     utf8_argv[idx] = new char[utf8_arg.size()];
     memcpy(utf8_argv[idx], &utf8_arg[0], utf8_arg.size());
   }
-  return shaka::media::PackagerMain(argc, utf8_argv.get());
+  return shaka::PackagerMain(argc, utf8_argv.get());
 }
 #else
 int main(int argc, char** argv) {
-  return shaka::media::PackagerMain(argc, argv);
+  return shaka::PackagerMain(argc, argv);
 }
 #endif  // defined(OS_WIN)

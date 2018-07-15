@@ -6,14 +6,12 @@
 //
 // Muxer utility functions.
 
-#ifndef MEDIA_BASE_MUXER_UTIL_H_
-#define MEDIA_BASE_MUXER_UTIL_H_
+#ifndef PACKAGER_MEDIA_BASE_MUXER_UTIL_H_
+#define PACKAGER_MEDIA_BASE_MUXER_UTIL_H_
 
 #include <stdint.h>
 
-#include <string>
-
-#include "packager/media/base/key_source.h"
+#include "packager/status.h"
 
 namespace shaka {
 namespace media {
@@ -23,9 +21,9 @@ class StreamInfo;
 /// Validates the segment template against segment URL construction rule
 /// specified in ISO/IEC 23009-1:2012 5.3.9.4.4.
 /// @param segment_template is the template to be validated.
-/// @return true if the segment template complies with
-//          ISO/IEC 23009-1:2012 5.3.9.4.4, false otherwise.
-bool ValidateSegmentTemplate(const std::string& segment_template);
+/// @return OK if the segment template complies with
+//          ISO/IEC 23009-1:2012 5.3.9.4.4.
+Status ValidateSegmentTemplate(const std::string& segment_template);
 
 /// Build the segment name from provided input.
 /// @param segment_template is the segment template pattern, which should
@@ -39,15 +37,7 @@ std::string GetSegmentName(const std::string& segment_template,
                            uint32_t segment_index,
                            uint32_t bandwidth);
 
-/// Determine the track type for encryption from input.
-/// @param stream_info is the info of the stream.
-/// @param max_sd_pixels is the maximum number of pixels to be considered SD.
-///        Anything above is HD.
-/// @return track type for encryption.
-KeySource::TrackType GetTrackTypeForEncryption(const StreamInfo& stream_info,
-                                               uint32_t max_sd_pixels);
-
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_BASE_MUXER_UTIL_H_
+#endif  // PACKAGER_MEDIA_BASE_MUXER_UTIL_H_

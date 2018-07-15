@@ -10,9 +10,9 @@
 #include <memory>
 
 #include "packager/base/files/file_util.h"
+#include "packager/file/file.h"
 #include "packager/media/base/buffer_reader.h"
-#include "packager/media/base/test/status_test_util.h"
-#include "packager/media/file/file.h"
+#include "packager/status_test_util.h"
 
 namespace {
 const int kReservedBufferCapacity = 1000;
@@ -108,6 +108,18 @@ TEST_F(BufferWriterTest, AppendVector) {
   std::vector<uint8_t> data_read;
   ASSERT_TRUE(reader_->ReadToVector(&data_read, sizeof(kuint8Array)));
   ASSERT_EQ(v, data_read);
+}
+
+TEST_F(BufferWriterTest, AppendString) {
+  const char kTestData[] = "test_data";
+  writer_->AppendString(kTestData);
+  // -1 to remove the null terminating character.
+  ASSERT_EQ(strlen(kTestData), writer_->Size());
+
+  CreateReader();
+  std::string data_read;
+  ASSERT_TRUE(reader_->ReadToString(&data_read, strlen(kTestData)));
+  ASSERT_EQ(kTestData, data_read);
 }
 
 TEST_F(BufferWriterTest, AppendArray) {

@@ -2,21 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef MEDIA_FORMATS_WEBM_WEBM_CONTENT_ENCODINGS_CLIENT_H_
-#define MEDIA_FORMATS_WEBM_WEBM_CONTENT_ENCODINGS_CLIENT_H_
+#ifndef PACKAGER_MEDIA_FORMATS_WEBM_WEBM_CONTENT_ENCODINGS_CLIENT_H_
+#define PACKAGER_MEDIA_FORMATS_WEBM_WEBM_CONTENT_ENCODINGS_CLIENT_H_
 
 #include <memory>
 #include <vector>
 
 #include "packager/base/callback.h"
-#include "packager/base/compiler_specific.h"
 #include "packager/media/formats/webm/webm_content_encodings.h"
 #include "packager/media/formats/webm/webm_parser.h"
 
 namespace shaka {
 namespace media {
 
-typedef std::vector<ContentEncoding*> ContentEncodings;
+typedef std::vector<std::unique_ptr<ContentEncoding>> ContentEncodings;
 
 /// Parser for WebM ContentEncodings element.
 class WebMContentEncodingsClient : public WebMParserClient {
@@ -46,4 +45,4 @@ class WebMContentEncodingsClient : public WebMParserClient {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_FORMATS_WEBM_WEBM_CONTENT_ENCODINGS_CLIENT_H_
+#endif  // PACKAGER_MEDIA_FORMATS_WEBM_WEBM_CONTENT_ENCODINGS_CLIENT_H_

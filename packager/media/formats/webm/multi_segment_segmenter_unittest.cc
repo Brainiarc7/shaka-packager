@@ -6,31 +6,19 @@
 
 #include <gtest/gtest.h>
 #include <memory>
+#include "packager/media/base/muxer_util.h"
 #include "packager/media/formats/webm/segmenter_test_base.h"
 
 namespace shaka {
 namespace media {
 namespace {
 
-const uint64_t kDuration = 1000;
+const uint32_t kTimeScale = 1000000u;
+const uint64_t kDuration = 1000000u;
+const bool kSubsegment = true;
 
 const uint8_t kBasicSupportDataInit[] = {
-  // ID: EBML Header, Payload Size: 31
-  0x1a, 0x45, 0xdf, 0xa3, 0x9f,
-    // EBMLVersion: 1
-    0x42, 0x86, 0x81, 0x01,
-    // EBMLReadVersion: 1
-    0x42, 0xf7, 0x81, 0x01,
-    // EBMLMaxIDLength: 4
-    0x42, 0xf2, 0x81, 0x04,
-    // EBMLMaxSizeLength: 8
-    0x42, 0xf3, 0x81, 0x08,
-    // DocType: 'webm'
-    0x42, 0x82, 0x84, 0x77, 0x65, 0x62, 0x6d,
-    // DocTypeVersion: 2
-    0x42, 0x87, 0x81, 0x02,
-    // DocTypeReadVersion: 2
-    0x42, 0x85, 0x81, 0x02,
+  // ID: EBML Header omitted.
   // ID: Segment, Payload Size: Unknown
   0x18, 0x53, 0x80, 0x67, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     // ID: Void, Payload Size: 87
@@ -42,12 +30,10 @@ const uint8_t kBasicSupportDataInit[] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00,
-    // ID: Info, Payload Size: 88
-    0x15, 0x49, 0xa9, 0x66, 0xd8,
+    // ID: Info, Payload Size: 81
+    0x15, 0x49, 0xa9, 0x66, 0xd1,
       // TimecodeScale: 1000000
       0x2a, 0xd7, 0xb1, 0x83, 0x0f, 0x42, 0x40,
-      // Duration: float(0)
-      0x44, 0x89, 0x84, 0x3f, 0x80, 0x00, 0x00,
       // MuxingApp: 'libwebm-0.2.1.0'
       0x4d, 0x80, 0x8f, 0x6c, 0x69, 0x62, 0x77, 0x65, 0x62, 0x6d, 0x2d, 0x30,
       0x2e, 0x32, 0x2e, 0x31, 0x2e, 0x30,
@@ -108,141 +94,106 @@ const uint8_t kBasicSupportDataSegment[] = {
 
 class MultiSegmentSegmenterTest : public SegmentTestBase {
  public:
-  MultiSegmentSegmenterTest() : info_(CreateVideoStreamInfo()) {}
+  MultiSegmentSegmenterTest()
+      : info_(CreateVideoStreamInfo(kTimeScale)),
+        segment_template_(std::string(kMemoryFilePrefix) +
+                          "output-template-$Number$.webm") {}
 
  protected:
   void InitializeSegmenter(const MuxerOptions& options) {
     ASSERT_NO_FATAL_FAILURE(
         CreateAndInitializeSegmenter<webm::MultiSegmentSegmenter>(
-            options, info_.get(), NULL, &segmenter_));
+            options, *info_, &segmenter_));
   }
 
-  scoped_refptr<StreamInfo> info_;
+  std::string TemplateFileName(int number) const {
+    return GetSegmentName(segment_template_, 0, number, 0);
+  }
+
+  std::shared_ptr<StreamInfo> info_;
+  std::string segment_template_;
   std::unique_ptr<webm::Segmenter> segmenter_;
 };
 
 TEST_F(MultiSegmentSegmenterTest, BasicSupport) {
   MuxerOptions options = CreateMuxerOptions();
+  options.segment_template = segment_template_;
   ASSERT_NO_FATAL_FAILURE(InitializeSegmenter(options));
 
   // Write the samples to the Segmenter.
   for (int i = 0; i < 5; i++) {
-    scoped_refptr<MediaSample> sample =
+    std::shared_ptr<MediaSample> sample =
         CreateSample(kKeyFrame, kDuration, kNoSideData);
-    ASSERT_OK(segmenter_->AddSample(sample));
+    ASSERT_OK(segmenter_->AddSample(*sample));
   }
+  ASSERT_OK(segmenter_->FinalizeSegment(0, 8 * kDuration, !kSubsegment));
   ASSERT_OK(segmenter_->Finalize());
 
   // Verify the resulting data.
-  ASSERT_FILE_EQ(OutputFileName().c_str(), kBasicSupportDataInit);
+  ASSERT_FILE_ENDS_WITH(OutputFileName().c_str(), kBasicSupportDataInit);
   ASSERT_FILE_EQ(TemplateFileName(0).c_str(), kBasicSupportDataSegment);
 
   // There is no second segment.
   EXPECT_FALSE(File::Open(TemplateFileName(1).c_str(), "r"));
 }
 
-TEST_F(MultiSegmentSegmenterTest, SplitsFilesOnSegmentDuration) {
+TEST_F(MultiSegmentSegmenterTest, SplitsFilesOnSegment) {
   MuxerOptions options = CreateMuxerOptions();
-  options.segment_duration = 5;  // seconds
+  options.segment_template = segment_template_;
   ASSERT_NO_FATAL_FAILURE(InitializeSegmenter(options));
 
   // Write the samples to the Segmenter.
   for (int i = 0; i < 8; i++) {
-    scoped_refptr<MediaSample> sample =
+    if (i == 5) {
+      ASSERT_OK(segmenter_->FinalizeSegment(0, 5 * kDuration, !kSubsegment));
+    }
+    std::shared_ptr<MediaSample> sample =
         CreateSample(kKeyFrame, kDuration, kNoSideData);
-    ASSERT_OK(segmenter_->AddSample(sample));
+    ASSERT_OK(segmenter_->AddSample(*sample));
   }
+  ASSERT_OK(
+      segmenter_->FinalizeSegment(5 * kDuration, 8 * kDuration, !kSubsegment));
   ASSERT_OK(segmenter_->Finalize());
 
   // Verify the resulting data.
   ClusterParser parser;
   ASSERT_NO_FATAL_FAILURE(parser.PopulateFromCluster(TemplateFileName(0)));
-  ASSERT_EQ(1, parser.cluster_count());
-  EXPECT_EQ(5, parser.GetFrameCountForCluster(0));
+  ASSERT_EQ(1u, parser.cluster_count());
+  EXPECT_EQ(5u, parser.GetFrameCountForCluster(0));
 
   ASSERT_NO_FATAL_FAILURE(parser.PopulateFromCluster(TemplateFileName(1)));
-  ASSERT_EQ(1, parser.cluster_count());
-  EXPECT_EQ(3, parser.GetFrameCountForCluster(0));
+  ASSERT_EQ(1u, parser.cluster_count());
+  EXPECT_EQ(3u, parser.GetFrameCountForCluster(0));
 
   EXPECT_FALSE(File::Open(TemplateFileName(2).c_str(), "r"));
 }
 
-TEST_F(MultiSegmentSegmenterTest, RespectsSegmentSAPAlign) {
+TEST_F(MultiSegmentSegmenterTest, SplitsClustersOnSubsegment) {
   MuxerOptions options = CreateMuxerOptions();
-  options.segment_duration = 3;  // seconds
-  options.segment_sap_aligned = true;
-  ASSERT_NO_FATAL_FAILURE(InitializeSegmenter(options));
-
-  // Write the samples to the Segmenter.
-  for (int i = 0; i < 10; i++) {
-    const KeyFrameFlag key_frame_flag = i == 6 ? kKeyFrame : kNotKeyFrame;
-    scoped_refptr<MediaSample> sample =
-        CreateSample(key_frame_flag, kDuration, kNoSideData);
-    ASSERT_OK(segmenter_->AddSample(sample));
-  }
-  ASSERT_OK(segmenter_->Finalize());
-
-  // Verify the resulting data.
-  ClusterParser parser;
-  ASSERT_NO_FATAL_FAILURE(parser.PopulateFromCluster(TemplateFileName(0)));
-  ASSERT_EQ(1, parser.cluster_count());
-  EXPECT_EQ(6, parser.GetFrameCountForCluster(0));
-
-  ASSERT_NO_FATAL_FAILURE(parser.PopulateFromCluster(TemplateFileName(1)));
-  ASSERT_EQ(1, parser.cluster_count());
-  EXPECT_EQ(4, parser.GetFrameCountForCluster(0));
-
-  EXPECT_FALSE(File::Open(TemplateFileName(2).c_str(), "r"));
-}
-
-TEST_F(MultiSegmentSegmenterTest, SplitsClustersOnFragmentDuration) {
-  MuxerOptions options = CreateMuxerOptions();
-  options.fragment_duration = 5;  // seconds
+  options.segment_template = segment_template_;
   ASSERT_NO_FATAL_FAILURE(InitializeSegmenter(options));
 
   // Write the samples to the Segmenter.
   for (int i = 0; i < 8; i++) {
-    scoped_refptr<MediaSample> sample =
+    if (i == 5) {
+      ASSERT_OK(segmenter_->FinalizeSegment(0, 5 * kDuration, kSubsegment));
+    }
+    std::shared_ptr<MediaSample> sample =
         CreateSample(kKeyFrame, kDuration, kNoSideData);
-    ASSERT_OK(segmenter_->AddSample(sample));
+    ASSERT_OK(segmenter_->AddSample(*sample));
   }
+  ASSERT_OK(segmenter_->FinalizeSegment(0, 8 * kDuration, !kSubsegment));
   ASSERT_OK(segmenter_->Finalize());
 
   // Verify the resulting data.
   ClusterParser parser;
   ASSERT_NO_FATAL_FAILURE(parser.PopulateFromCluster(TemplateFileName(0)));
-  ASSERT_EQ(2, parser.cluster_count());
-  EXPECT_EQ(5, parser.GetFrameCountForCluster(0));
-  EXPECT_EQ(3, parser.GetFrameCountForCluster(1));
-
-  EXPECT_FALSE(File::Open(TemplateFileName(1).c_str(), "r"));
-}
-
-TEST_F(MultiSegmentSegmenterTest, RespectsFragmentSAPAlign) {
-  MuxerOptions options = CreateMuxerOptions();
-  options.fragment_duration = 3;  // seconds
-  options.fragment_sap_aligned = true;
-  ASSERT_NO_FATAL_FAILURE(InitializeSegmenter(options));
-
-  // Write the samples to the Segmenter.
-  for (int i = 0; i < 10; i++) {
-    const KeyFrameFlag key_frame_flag = i == 6 ? kKeyFrame : kNotKeyFrame;
-    scoped_refptr<MediaSample> sample =
-        CreateSample(key_frame_flag, kDuration, kNoSideData);
-    ASSERT_OK(segmenter_->AddSample(sample));
-  }
-  ASSERT_OK(segmenter_->Finalize());
-
-  // Verify the resulting data.
-  ClusterParser parser;
-  ASSERT_NO_FATAL_FAILURE(parser.PopulateFromCluster(TemplateFileName(0)));
-  ASSERT_EQ(2, parser.cluster_count());
-  EXPECT_EQ(6, parser.GetFrameCountForCluster(0));
-  EXPECT_EQ(4, parser.GetFrameCountForCluster(1));
+  ASSERT_EQ(2u, parser.cluster_count());
+  EXPECT_EQ(5u, parser.GetFrameCountForCluster(0));
+  EXPECT_EQ(3u, parser.GetFrameCountForCluster(1));
 
   EXPECT_FALSE(File::Open(TemplateFileName(1).c_str(), "r"));
 }
 
 }  // namespace media
 }  // namespace shaka
-

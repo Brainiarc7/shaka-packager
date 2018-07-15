@@ -4,14 +4,14 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_FORMATS_WEBM_SINGLE_SEGMENT_SEGMENTER_H_
-#define MEDIA_FORMATS_WEBM_SINGLE_SEGMENT_SEGMENTER_H_
+#ifndef PACKAGER_MEDIA_FORMATS_WEBM_SINGLE_SEGMENT_SEGMENTER_H_
+#define PACKAGER_MEDIA_FORMATS_WEBM_SINGLE_SEGMENT_SEGMENTER_H_
 
 #include "packager/media/formats/webm/segmenter.h"
 
 #include <memory>
-#include "packager/media/base/status.h"
 #include "packager/media/formats/webm/mkv_writer.h"
+#include "packager/status.h"
 
 namespace shaka {
 namespace media {
@@ -30,12 +30,17 @@ class SingleSegmentSegmenter : public Segmenter {
 
   /// @name Segmenter implementation overrides.
   /// @{
+  Status FinalizeSegment(uint64_t start_timestamp,
+                         uint64_t duration_timestamp,
+                         bool is_subsegment) override;
   bool GetInitRangeStartAndEnd(uint64_t* start, uint64_t* end) override;
   bool GetIndexRangeStartAndEnd(uint64_t* start, uint64_t* end) override;
+  std::vector<Range> GetSegmentRanges() override;
   /// @}
 
  protected:
   MkvWriter* writer() { return writer_.get(); }
+  uint64_t init_end() { return init_end_; }
   void set_init_end(uint64_t end) { init_end_ = end; }
   void set_index_start(uint64_t start) { index_start_ = start; }
   void set_index_end(uint64_t end) { index_end_ = end; }
@@ -44,13 +49,12 @@ class SingleSegmentSegmenter : public Segmenter {
   }
 
   // Segmenter implementation overrides.
-  Status DoInitialize(std::unique_ptr<MkvWriter> writer) override;
+  Status DoInitialize() override;
   Status DoFinalize() override;
 
  private:
   // Segmenter implementation overrides.
-  Status NewSubsegment(uint64_t start_timescale) override;
-  Status NewSegment(uint64_t start_timescale) override;
+  Status NewSegment(uint64_t start_timestamp, bool is_subsegment) override;
 
   std::unique_ptr<MkvWriter> writer_;
   uint64_t init_end_;
@@ -64,4 +68,4 @@ class SingleSegmentSegmenter : public Segmenter {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_FORMATS_WEBM_SINGLE_SEGMENT_SEGMENTER_H_
+#endif  // PACKAGER_MEDIA_FORMATS_WEBM_SINGLE_SEGMENT_SEGMENTER_H_

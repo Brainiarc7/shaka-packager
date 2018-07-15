@@ -39,14 +39,14 @@ EsParserH265::~EsParserH265() {}
 void EsParserH265::Reset() {
   DVLOG(1) << "EsParserH265::Reset";
   h265_parser_.reset(new H265Parser());
-  last_video_decoder_config_ = scoped_refptr<StreamInfo>();
+  last_video_decoder_config_ = std::shared_ptr<StreamInfo>();
   decoder_config_check_pending_ = false;
   EsParserH26x::Reset();
 }
 
 bool EsParserH265::ProcessNalu(const Nalu& nalu,
-                               bool* is_key_frame,
-                               int* pps_id_for_access_unit) {
+                               VideoSliceInfo* video_slice_info) {
+  video_slice_info->valid = false;
   switch (nalu.type()) {
     case Nalu::H265_AUD: {
       DVLOG(LOG_LEVEL_ES) << "Nalu: AUD";
@@ -73,9 +73,9 @@ bool EsParserH265::ProcessNalu(const Nalu& nalu,
       break;
     }
     default: {
-      if (nalu.is_video_slice()) {
-        *is_key_frame = nalu.type() == Nalu::H265_IDR_W_RADL ||
-                        nalu.type() == Nalu::H265_IDR_N_LP;
+      if (nalu.is_vcl() && nalu.nuh_layer_id() == 0) {
+        const bool is_key_frame = nalu.type() == Nalu::H265_IDR_W_RADL ||
+                                  nalu.type() == Nalu::H265_IDR_N_LP;
         DVLOG(LOG_LEVEL_ES) << "Nalu: slice KeyFrame=" << is_key_frame;
         H265SliceHeader shdr;
         if (h265_parser_->ParseSliceHeader(nalu, &shdr) != H265Parser::kOk) {
@@ -84,7 +84,10 @@ bool EsParserH265::ProcessNalu(const Nalu& nalu,
           if (last_video_decoder_config_)
             return false;
         } else {
-          *pps_id_for_access_unit = shdr.pic_parameter_set_id;
+          video_slice_info->valid = true;
+          video_slice_info->is_key_frame = is_key_frame;
+          video_slice_info->frame_num = 0;  // frame_num is only for H264.
+          video_slice_info->pps_id = shdr.pic_parameter_set_id;
         }
       } else {
         DVLOG(LOG_LEVEL_ES) << "Nalu: " << nalu.type();
@@ -148,12 +151,18 @@ bool EsParserH265::UpdateVideoDecoderConfig(int pps_id) {
     return false;
   }
 
-  last_video_decoder_config_ = scoped_refptr<StreamInfo>(new VideoStreamInfo(
-      pid(), kMpeg2Timescale, kInfiniteDuration, kCodecHVC1,
-      decoder_config.GetCodecString(kCodecHVC1), decoder_config_record.data(),
+  const uint8_t nalu_length_size =
+      H26xByteToUnitStreamConverter::kUnitStreamNaluLengthSize;
+  const H26xStreamFormat stream_format = stream_converter()->stream_format();
+  const FourCC codec_fourcc =
+      stream_format == H26xStreamFormat::kNalUnitStreamWithParameterSetNalus
+          ? FOURCC_hev1
+          : FOURCC_hvc1;
+  last_video_decoder_config_ = std::make_shared<VideoStreamInfo>(
+      pid(), kMpeg2Timescale, kInfiniteDuration, kCodecH265, stream_format,
+      decoder_config.GetCodecString(codec_fourcc), decoder_config_record.data(),
       decoder_config_record.size(), coded_width, coded_height, pixel_width,
-      pixel_height, 0, H26xByteToUnitStreamConverter::kUnitStreamNaluLengthSize,
-      std::string(), false));
+      pixel_height, 0, nalu_length_size, std::string(), false);
 
   // Video config notification.
   new_stream_info_cb_.Run(last_video_decoder_config_);

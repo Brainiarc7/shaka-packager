@@ -9,8 +9,8 @@
 
 #include "packager/base/bind.h"
 #include "packager/base/logging.h"
-#include "packager/media/base/fixed_key_source.h"
 #include "packager/media/base/media_sample.h"
+#include "packager/media/base/raw_key_source.h"
 #include "packager/media/base/stream_info.h"
 #include "packager/media/base/video_stream_info.h"
 #include "packager/media/formats/mp4/mp4_media_parser.h"
@@ -29,9 +29,11 @@ const char kKey[] =
     "\xeb\xdd\x62\xf1\x68\x14\xd2\x7b\x68\xef\x12\x2a\xfc\xe4\xae\x3c";
 const char kKeyId[] = "0123456789012345";
 
-class MockKeySource : public FixedKeySource {
+class MockKeySource : public RawKeySource {
  public:
-  MOCK_METHOD1(FetchKeys, Status(const std::vector<uint8_t>& pssh_data));
+  MOCK_METHOD2(FetchKeys,
+               Status(EmeInitDataType init_data_type,
+                      const std::vector<uint8_t>& init_data));
   MOCK_METHOD2(GetKey,
                Status(const std::vector<uint8_t>& key_id, EncryptionKey* key));
 };
@@ -46,14 +48,14 @@ class MP4MediaParserTest : public testing::Test {
   }
 
  protected:
-  typedef std::map<int, scoped_refptr<StreamInfo> > StreamMap;
+  typedef std::map<int, std::shared_ptr<StreamInfo>> StreamMap;
   StreamMap stream_map_;
   std::unique_ptr<MP4MediaParser> parser_;
   size_t num_streams_;
   size_t num_samples_;
 
   bool AppendData(const uint8_t* data, size_t length) {
-    return parser_->Parse(data, length);
+    return parser_->Parse(data, static_cast<int>(length));
   }
 
   bool AppendDataInPieces(const uint8_t* data,
@@ -71,19 +73,17 @@ class MP4MediaParserTest : public testing::Test {
     return true;
   }
 
-  void InitF(const std::vector<scoped_refptr<StreamInfo> >& streams) {
-    for (std::vector<scoped_refptr<StreamInfo> >::const_iterator iter =
-             streams.begin();
-         iter != streams.end();
-         ++iter) {
-      DVLOG(2) << (*iter)->ToString();
-      stream_map_[(*iter)->track_id()] = *iter;
+  void InitF(const std::vector<std::shared_ptr<StreamInfo>>& streams) {
+    for (const auto& stream_info : streams) {
+      DVLOG(2) << stream_info->ToString();
+      stream_map_[stream_info->track_id()] = stream_info;
     }
     num_streams_ = streams.size();
     num_samples_ = 0;
   }
 
-  bool NewSampleF(uint32_t track_id, const scoped_refptr<MediaSample>& sample) {
+  bool NewSampleF(uint32_t track_id,
+                  const std::shared_ptr<MediaSample>& sample) {
     DVLOG(2) << "Track Id: " << track_id << " "
              << sample->ToString();
     ++num_samples_;
@@ -188,6 +188,15 @@ TEST_F(MP4MediaParserTest, TrailingMoov) {
   EXPECT_EQ(201u, num_samples_);
 }
 
+TEST_F(MP4MediaParserTest, TrailingMoovAndAdditionalMdat) {
+  // The additional mdat should just be ignored, so the parse is still
+  // successful with the same result.
+  EXPECT_TRUE(
+      ParseMP4File("bear-640x360-trailing-moov-additional-mdat.mp4", 1024));
+  EXPECT_EQ(2u, num_streams_);
+  EXPECT_EQ(201u, num_samples_);
+}
+
 TEST_F(MP4MediaParserTest, Flush) {
   // Flush while reading sample data, then start a new stream.
   InitializeParser(NULL);
@@ -228,9 +237,13 @@ TEST_F(MP4MediaParserTest, NON_FRAGMENTED_MP4) {
 }
 
 TEST_F(MP4MediaParserTest, CencWithoutDecryptionSource) {
-  // Parsing should fail but it will get the streams successfully.
-  EXPECT_FALSE(ParseMP4File("bear-640x360-v_frag-cenc-aux.mp4", 512));
+  EXPECT_TRUE(ParseMP4File("bear-640x360-v_frag-cenc-aux.mp4", 512));
   EXPECT_EQ(1u, num_streams_);
+  // Check if pssh is present.
+  const int kVideoTrackId = 1;
+  EXPECT_NE(0u,
+            reinterpret_cast<VideoStreamInfo*>(stream_map_[kVideoTrackId].get())
+                ->eme_init_data().size());
 }
 
 TEST_F(MP4MediaParserTest, CencInitWithoutDecryptionSource) {
@@ -245,7 +258,7 @@ TEST_F(MP4MediaParserTest, CencInitWithoutDecryptionSource) {
 
 TEST_F(MP4MediaParserTest, CencWithDecryptionSourceAndAuxInMdat) {
   MockKeySource mock_key_source;
-  EXPECT_CALL(mock_key_source, FetchKeys(_)).WillOnce(Return(Status::OK));
+  EXPECT_CALL(mock_key_source, FetchKeys(_, _)).WillOnce(Return(Status::OK));
 
   EncryptionKey encryption_key;
   encryption_key.key.assign(kKey, kKey + strlen(kKey));
@@ -264,7 +277,7 @@ TEST_F(MP4MediaParserTest, CencWithDecryptionSourceAndAuxInMdat) {
 
 TEST_F(MP4MediaParserTest, CencWithDecryptionSourceAndSenc) {
   MockKeySource mock_key_source;
-  EXPECT_CALL(mock_key_source, FetchKeys(_)).WillOnce(Return(Status::OK));
+  EXPECT_CALL(mock_key_source, FetchKeys(_, _)).WillOnce(Return(Status::OK));
 
   EncryptionKey encryption_key;
   encryption_key.key.assign(kKey, kKey + strlen(kKey));

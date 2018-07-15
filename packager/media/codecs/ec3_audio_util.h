@@ -6,9 +6,10 @@
 //
 // Enhanced AC3 audio utility functions.
 
-#ifndef MEDIA_CODECS_EC3_AUDIO_UTIL_H_
-#define MEDIA_CODECS_EC3_AUDIO_UTIL_H_
+#ifndef PACKAGER_MEDIA_CODECS_EC3_AUDIO_UTIL_H_
+#define PACKAGER_MEDIA_CODECS_EC3_AUDIO_UTIL_H_
 
+#include <stddef.h>
 #include <stdint.h>
 #include <vector>
 
@@ -21,7 +22,12 @@ namespace media {
 bool CalculateEC3ChannelMap(const std::vector<uint8_t>& ec3_data,
                             uint32_t* channel_map);
 
+/// Parse data from EC3Specific box and calculate number of channels.
+/// @return The number of channels associated with the input ec3 data on
+///         success; otherwise 0 is returned.
+size_t GetEc3NumChannels(const std::vector<uint8_t>& ec3_data);
+
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_CODECS_EC3_AUDIO_UTIL_H_
+#endif  // PACKAGER_MEDIA_CODECS_EC3_AUDIO_UTIL_H_

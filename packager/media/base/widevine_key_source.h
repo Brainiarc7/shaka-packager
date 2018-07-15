@@ -4,22 +4,21 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_BASE_WIDEVINE_KEY_SOURCE_H_
-#define MEDIA_BASE_WIDEVINE_KEY_SOURCE_H_
+#ifndef PACKAGER_MEDIA_BASE_WIDEVINE_KEY_SOURCE_H_
+#define PACKAGER_MEDIA_BASE_WIDEVINE_KEY_SOURCE_H_
 
 #include <map>
 #include <memory>
 #include "packager/base/synchronization/waitable_event.h"
-#include "packager/base/values.h"
 #include "packager/media/base/closure_thread.h"
+#include "packager/media/base/fourccs.h"
 #include "packager/media/base/key_source.h"
 
 namespace shaka {
-namespace media {
 
-const uint8_t kWidevineSystemId[] = {0xed, 0xef, 0x8b, 0xa9, 0x79, 0xd6,
-                                     0x4a, 0xce, 0xa3, 0xc8, 0x27, 0xdc,
-                                     0xd5, 0x1d, 0x21, 0xed};
+class CommonEncryptionRequest;
+
+namespace media {
 
 class KeyFetcher;
 class RequestSigner;
@@ -30,21 +29,22 @@ template <class T> class ProducerConsumerQueue;
 class WidevineKeySource : public KeySource {
  public:
   /// @param server_url is the Widevine common encryption server url.
-  WidevineKeySource(const std::string& server_url, bool add_common_pssh);
+  /// @param proteciton_systems_flags is the flags indicating which PSSH should
+  ///        be included.
+  WidevineKeySource(const std::string& server_url,
+                    int protection_systems_flags);
 
   ~WidevineKeySource() override;
 
   /// @name KeySource implementation overrides.
   /// @{
-  Status FetchKeys(const std::vector<uint8_t>& pssh_box) override;
-  Status FetchKeys(const std::vector<std::vector<uint8_t>>& key_ids) override;
-  Status FetchKeys(uint32_t asset_id) override;
-
-  Status GetKey(TrackType track_type, EncryptionKey* key) override;
+  Status FetchKeys(EmeInitDataType init_data_type,
+                   const std::vector<uint8_t>& init_data) override;
+  Status GetKey(const std::string& stream_label, EncryptionKey* key) override;
   Status GetKey(const std::vector<uint8_t>& key_id,
                 EncryptionKey* key) override;
   Status GetCryptoPeriodKey(uint32_t crypto_period_index,
-                            TrackType track_type,
+                            const std::string& stream_label,
                             EncryptionKey* key) override;
   /// @}
 
@@ -55,6 +55,11 @@ class WidevineKeySource : public KeySource {
   Status FetchKeys(const std::vector<uint8_t>& content_id,
                    const std::string& policy);
 
+  /// Set the protection scheme for the key source.
+  void set_protection_scheme(FourCC protection_scheme) {
+    protection_scheme_ = protection_scheme;
+  }
+
   /// Set signer for the key source.
   /// @param signer signs the request message.
   void set_signer(std::unique_ptr<RequestSigner> signer);
@@ -63,18 +68,20 @@ class WidevineKeySource : public KeySource {
   /// @param key_fetcher points to the @b KeyFetcher object to be injected.
   void set_key_fetcher(std::unique_ptr<KeyFetcher> key_fetcher);
 
- protected:
-   ClosureThread key_production_thread_;
+  void set_group_id(const std::vector<uint8_t>& group_id) {
+    group_id_ = group_id;
+  }
+  void set_enable_entitlement_license(bool enable_entitlement_license) {
+    enable_entitlement_license_ = enable_entitlement_license;
+  }
 
  private:
-  typedef std::map<TrackType, EncryptionKey*> EncryptionKeyMap;
-  class RefCountedEncryptionKeyMap;
-  typedef ProducerConsumerQueue<scoped_refptr<RefCountedEncryptionKeyMap> >
+  typedef ProducerConsumerQueue<std::shared_ptr<EncryptionKeyMap>>
       EncryptionKeyQueue;
 
   // Internal routine for getting keys.
   Status GetKeyInternal(uint32_t crypto_period_index,
-                        TrackType track_type,
+                        const std::string& stream_label,
                         EncryptionKey* key);
 
   // The closure task to fetch keys repeatedly.
@@ -89,13 +96,11 @@ class WidevineKeySource : public KeySource {
   // |request| should not be NULL.
   void FillRequest(bool enable_key_rotation,
                    uint32_t first_crypto_period_index,
-                   std::string* request);
-  // Base64 escape and format the request. Optionally sign the request if a
-  // signer is provided. |message| should not be NULL. Return OK on success.
-  Status GenerateKeyMessage(const std::string& request, std::string* message);
-  // Decode |response| from JSON formatted |raw_response|.
-  // |response| should not be NULL.
-  bool DecodeResponse(const std::string& raw_response, std::string* response);
+                   CommonEncryptionRequest* request);
+  // Get request in JSON string. Optionally sign the request if a signer is
+  // provided. |message| should not be NULL. Return OK on success.
+  Status GenerateKeyMessage(const CommonEncryptionRequest& request,
+                            std::string* message);
   // Extract encryption key from |response|, which is expected to be properly
   // formatted. |transient_error| will be set to true if it fails and the
   // failure is because of a transient error from the server. |transient_error|
@@ -107,20 +112,23 @@ class WidevineKeySource : public KeySource {
   // Push the keys to the key pool.
   bool PushToKeyPool(EncryptionKeyMap* encryption_key_map);
 
+  ClosureThread key_production_thread_;
   // The fetcher object used to fetch keys from the license service.
   // It is initialized to a default fetcher on class initialization.
   // Can be overridden using set_key_fetcher for testing or other purposes.
   std::unique_ptr<KeyFetcher> key_fetcher_;
   std::string server_url_;
   std::unique_ptr<RequestSigner> signer_;
-  base::DictionaryValue request_dict_;
+  std::unique_ptr<CommonEncryptionRequest> common_encryption_request_;
 
-  const uint32_t crypto_period_count_;
+  const int crypto_period_count_;
+  FourCC protection_scheme_;
   base::Lock lock_;
-  bool add_common_pssh_;
   bool key_production_started_;
   base::WaitableEvent start_key_production_;
   uint32_t first_crypto_period_index_;
+  std::vector<uint8_t> group_id_;
+  bool enable_entitlement_license_;
   std::unique_ptr<EncryptionKeyQueue> key_pool_;
   EncryptionKeyMap encryption_key_map_;  // For non key rotation request.
   Status common_encryption_request_status_;
@@ -131,4 +139,4 @@ class WidevineKeySource : public KeySource {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_BASE_WIDEVINE_KEY_SOURCE_H_
+#endif  // PACKAGER_MEDIA_BASE_WIDEVINE_KEY_SOURCE_H_

@@ -9,19 +9,17 @@
 #include <algorithm>
 
 #include "packager/base/logging.h"
-#include "packager/base/stl_util.h"
-#include "packager/media/base/aes_cryptor.h"
 #include "packager/media/base/buffer_writer.h"
-#include "packager/media/base/key_source.h"
+#include "packager/media/base/id3_tag.h"
 #include "packager/media/base/media_sample.h"
-#include "packager/media/base/media_stream.h"
 #include "packager/media/base/muxer_options.h"
 #include "packager/media/base/muxer_util.h"
-#include "packager/media/base/video_stream_info.h"
-#include "packager/media/event/muxer_listener.h"
+#include "packager/media/base/stream_info.h"
+#include "packager/media/chunking/chunking_handler.h"
 #include "packager/media/event/progress_listener.h"
 #include "packager/media/formats/mp4/box_definitions.h"
-#include "packager/media/formats/mp4/key_rotation_fragmenter.h"
+#include "packager/media/formats/mp4/fragmenter.h"
+#include "packager/media/formats/mp4/key_frame_info.h"
 #include "packager/version/version.h"
 
 namespace shaka {
@@ -29,119 +27,11 @@ namespace media {
 namespace mp4 {
 
 namespace {
-const size_t kCencKeyIdSize = 16u;
-
-// The version of cenc implemented here. CENC 4.
-const int kCencSchemeVersion = 0x00010000;
-
-// The default KID for key rotation is all 0s.
-const uint8_t kKeyRotationDefaultKeyId[] = {
-  0, 0, 0, 0, 0, 0, 0, 0,
-  0, 0, 0, 0, 0, 0, 0, 0
-};
-
-// Defines protection pattern for pattern-based encryption.
-struct ProtectionPattern {
-  uint8_t crypt_byte_block;
-  uint8_t skip_byte_block;
-};
-
-static_assert(arraysize(kKeyRotationDefaultKeyId) == kCencKeyIdSize,
-              "cenc_key_id_must_be_size_16");
 
 uint64_t Rescale(uint64_t time_in_old_scale,
                  uint32_t old_scale,
                  uint32_t new_scale) {
   return static_cast<double>(time_in_old_scale) / old_scale * new_scale;
-}
-
-ProtectionPattern GetProtectionPattern(FourCC protection_scheme,
-                                       TrackType track_type) {
-  ProtectionPattern pattern;
-  if (protection_scheme != FOURCC_cbcs && protection_scheme != FOURCC_cens) {
-    // Not using pattern encryption.
-    pattern.crypt_byte_block = 0u;
-    pattern.skip_byte_block = 0u;
-  } else if (track_type != kVideo) {
-    // Tracks other than video are protected using whole-block full-sample
-    // encryption, which is essentially a pattern of 1:0. Note that this may not
-    // be the same as the non-pattern based encryption counterparts, e.g. in
-    // 'cens' for full sample encryption, the whole sample is encrypted up to
-    // the last 16-byte boundary, see 23001-7:2016(E) 9.7; while in 'cenc' for
-    // full sample encryption, the last partial 16-byte block is also encrypted,
-    // see 23001-7:2016(E) 9.4.2. Another difference is the use of constant iv.
-    pattern.crypt_byte_block = 1u;
-    pattern.skip_byte_block = 0u;
-  } else {
-    // Use 1:9 pattern for video.
-    const uint8_t kCryptByteBlock = 1u;
-    const uint8_t kSkipByteBlock = 9u;
-    pattern.crypt_byte_block = kCryptByteBlock;
-    pattern.skip_byte_block = kSkipByteBlock;
-  }
-  return pattern;
-}
-
-void GenerateSinf(const EncryptionKey& encryption_key,
-                  FourCC old_type,
-                  FourCC protection_scheme,
-                  ProtectionPattern pattern,
-                  ProtectionSchemeInfo* sinf) {
-  sinf->format.format = old_type;
-
-  DCHECK_NE(protection_scheme, FOURCC_NULL);
-  sinf->type.type = protection_scheme;
-  sinf->type.version = kCencSchemeVersion;
-
-  auto& track_encryption = sinf->info.track_encryption;
-  track_encryption.default_is_protected = 1;
-  DCHECK(!encryption_key.iv.empty());
-  if (protection_scheme == FOURCC_cbcs) {
-    // ISO/IEC 23001-7:2016 10.4.1
-    // For 'cbcs' scheme, Constant IVs SHALL be used.
-    track_encryption.default_per_sample_iv_size = 0;
-    track_encryption.default_constant_iv = encryption_key.iv;
-  } else {
-    track_encryption.default_per_sample_iv_size =
-      static_cast<uint8_t>(encryption_key.iv.size());
-  }
-  track_encryption.default_crypt_byte_block = pattern.crypt_byte_block;
-  track_encryption.default_skip_byte_block = pattern.skip_byte_block;
-  track_encryption.default_kid = encryption_key.key_id;
-}
-
-void GenerateEncryptedSampleEntry(const EncryptionKey& encryption_key,
-                                  double clear_lead_in_seconds,
-                                  FourCC protection_scheme,
-                                  ProtectionPattern pattern,
-                                  SampleDescription* description) {
-  DCHECK(description);
-  if (description->type == kVideo) {
-    DCHECK_EQ(1u, description->video_entries.size());
-
-    // Add a second entry for clear content if needed.
-    if (clear_lead_in_seconds > 0)
-      description->video_entries.push_back(description->video_entries[0]);
-
-    // Convert the first entry to an encrypted entry.
-    VideoSampleEntry& entry = description->video_entries[0];
-    GenerateSinf(encryption_key, entry.format, protection_scheme, pattern,
-                 &entry.sinf);
-    entry.format = FOURCC_encv;
-  } else {
-    DCHECK_EQ(kAudio, description->type);
-    DCHECK_EQ(1u, description->audio_entries.size());
-
-    // Add a second entry for clear content if needed.
-    if (clear_lead_in_seconds > 0)
-      description->audio_entries.push_back(description->audio_entries[0]);
-
-    // Convert the first entry to an encrypted entry.
-    AudioSampleEntry& entry = description->audio_entries[0];
-    GenerateSinf(encryption_key, entry.format, protection_scheme, pattern,
-                 &entry.sinf);
-    entry.format = FOURCC_enca;
-  }
 }
 
 }  // namespace
@@ -154,129 +44,46 @@ Segmenter::Segmenter(const MuxerOptions& options,
       moov_(std::move(moov)),
       moof_(new MovieFragment()),
       fragment_buffer_(new BufferWriter()),
-      sidx_(new SegmentIndex()),
-      muxer_listener_(NULL),
-      progress_listener_(NULL),
-      progress_target_(0),
-      accumulated_progress_(0),
-      sample_duration_(0u) {}
+      sidx_(new SegmentIndex()) {}
 
-Segmenter::~Segmenter() { STLDeleteElements(&fragmenters_); }
+Segmenter::~Segmenter() {}
 
-Status Segmenter::Initialize(const std::vector<MediaStream*>& streams,
-                             MuxerListener* muxer_listener,
-                             ProgressListener* progress_listener,
-                             KeySource* encryption_key_source,
-                             uint32_t max_sd_pixels,
-                             double clear_lead_in_seconds,
-                             double crypto_period_duration_in_seconds,
-                             FourCC protection_scheme) {
+Status Segmenter::Initialize(
+    const std::vector<std::shared_ptr<const StreamInfo>>& streams,
+    MuxerListener* muxer_listener,
+    ProgressListener* progress_listener) {
   DCHECK_LT(0u, streams.size());
   muxer_listener_ = muxer_listener;
   progress_listener_ = progress_listener;
   moof_->header.sequence_number = 0;
 
   moof_->tracks.resize(streams.size());
-  segment_durations_.resize(streams.size());
   fragmenters_.resize(streams.size());
-  const bool key_rotation_enabled = crypto_period_duration_in_seconds != 0;
-  const bool kInitialEncryptionInfo = true;
+  stream_durations_.resize(streams.size());
 
   for (uint32_t i = 0; i < streams.size(); ++i) {
-    stream_map_[streams[i]] = i;
     moof_->tracks[i].header.track_id = i + 1;
-    if (streams[i]->info()->stream_type() == kStreamVideo) {
+    if (streams[i]->stream_type() == kStreamVideo) {
       // Use the first video stream as the reference stream (which is 1-based).
       if (sidx_->reference_id == 0)
         sidx_->reference_id = i + 1;
     }
-    if (!encryption_key_source) {
-      fragmenters_[i] = new Fragmenter(streams[i]->info(), &moof_->tracks[i]);
-      continue;
-    }
-
-    KeySource::TrackType track_type =
-        GetTrackTypeForEncryption(*streams[i]->info(), max_sd_pixels);
-    SampleDescription& description =
-        moov_->tracks[i].media.information.sample_table.description;
-    ProtectionPattern pattern =
-        GetProtectionPattern(protection_scheme, description.type);
-
-    if (key_rotation_enabled) {
-      // Fill encrypted sample entry with default key.
-      EncryptionKey encryption_key;
-      encryption_key.key_id.assign(
-          kKeyRotationDefaultKeyId,
-          kKeyRotationDefaultKeyId + arraysize(kKeyRotationDefaultKeyId));
-      if (!AesCryptor::GenerateRandomIv(protection_scheme,
-                                        &encryption_key.iv)) {
-        return Status(error::INTERNAL_ERROR, "Failed to generate random iv.");
-      }
-      GenerateEncryptedSampleEntry(encryption_key, clear_lead_in_seconds,
-                                   protection_scheme, pattern, &description);
-      if (muxer_listener_) {
-        muxer_listener_->OnEncryptionInfoReady(
-            kInitialEncryptionInfo, protection_scheme, encryption_key.key_id,
-            encryption_key.iv, encryption_key.key_system_info);
-      }
-
-      fragmenters_[i] = new KeyRotationFragmenter(
-          moof_.get(), streams[i]->info(), &moof_->tracks[i],
-          encryption_key_source, track_type,
-          crypto_period_duration_in_seconds * streams[i]->info()->time_scale(),
-          clear_lead_in_seconds * streams[i]->info()->time_scale(),
-          protection_scheme, pattern.crypt_byte_block, pattern.skip_byte_block,
-          muxer_listener_);
-      continue;
-    }
-
-    std::unique_ptr<EncryptionKey> encryption_key(new EncryptionKey());
-    Status status =
-        encryption_key_source->GetKey(track_type, encryption_key.get());
-    if (!status.ok())
-      return status;
-    if (encryption_key->iv.empty()) {
-      if (!AesCryptor::GenerateRandomIv(protection_scheme,
-                                        &encryption_key->iv)) {
-        return Status(error::INTERNAL_ERROR, "Failed to generate random iv.");
-      }
-    }
-
-    GenerateEncryptedSampleEntry(*encryption_key, clear_lead_in_seconds,
-                                 protection_scheme, pattern, &description);
-
-    if (moov_->pssh.empty()) {
-      moov_->pssh.resize(encryption_key->key_system_info.size());
-      for (size_t i = 0; i < encryption_key->key_system_info.size(); i++) {
-        moov_->pssh[i].raw_box = encryption_key->key_system_info[i].CreateBox();
-      }
-
-      if (muxer_listener_) {
-        muxer_listener_->OnEncryptionInfoReady(
-            kInitialEncryptionInfo, protection_scheme, encryption_key->key_id,
-            encryption_key->iv, encryption_key->key_system_info);
-      }
-    }
-
-    fragmenters_[i] = new EncryptingFragmenter(
-        streams[i]->info(), &moof_->tracks[i], std::move(encryption_key),
-        clear_lead_in_seconds * streams[i]->info()->time_scale(),
-        protection_scheme, pattern.crypt_byte_block, pattern.skip_byte_block,
-        muxer_listener_);
+    fragmenters_[i].reset(new Fragmenter(streams[i], &moof_->tracks[i]));
   }
 
-  if (options_.mp4_use_decoding_timestamp_in_timeline) {
+  // Only allow |EPT| to be adjusted for the first file.
+  if (options_.output_file_index == 0) {
     for (uint32_t i = 0; i < streams.size(); ++i)
-      fragmenters_[i]->set_use_decoding_timestamp_in_timeline(true);
+      fragmenters_[i]->set_allow_adjust_earliest_presentation_time(true);
   }
 
   // Choose the first stream if there is no VIDEO.
   if (sidx_->reference_id == 0)
     sidx_->reference_id = 1;
-  sidx_->timescale = streams[GetReferenceStreamId()]->info()->time_scale();
+  sidx_->timescale = streams[GetReferenceStreamId()]->time_scale();
 
   // Use media duration as progress target.
-  progress_target_ = streams[GetReferenceStreamId()]->info()->duration();
+  progress_target_ = streams[GetReferenceStreamId()]->duration();
 
   // Use the reference stream's time scale as movie time scale.
   moov_->header.timescale = sidx_->timescale;
@@ -287,152 +94,71 @@ Status Segmenter::Initialize(const std::vector<MediaStream*>& streams,
   if (!version.empty()) {
     moov_->metadata.handler.handler_type = FOURCC_ID32;
     moov_->metadata.id3v2.language.code = "eng";
-    moov_->metadata.id3v2.private_frame.owner = GetPackagerProjectUrl();
-    moov_->metadata.id3v2.private_frame.value = version;
+
+    Id3Tag id3_tag;
+    id3_tag.AddPrivateFrame(GetPackagerProjectUrl(), version);
+    CHECK(id3_tag.WriteToVector(&moov_->metadata.id3v2.id3v2_data));
   }
   return DoInitialize();
 }
 
 Status Segmenter::Finalize() {
-  for (std::vector<Fragmenter*>::iterator it = fragmenters_.begin();
-       it != fragmenters_.end();
-       ++it) {
-    Status status = FinalizeFragment(true, *it);
-    if (!status.ok())
-      return status;
+  // Set movie duration. Note that the duration in mvhd, tkhd, mdhd should not
+  // be touched, i.e. kept at 0. The updated moov box will be written to output
+  // file for VOD and static live case only.
+  moov_->extends.header.fragment_duration = 0;
+  for (size_t i = 0; i < stream_durations_.size(); ++i) {
+    uint64_t duration =
+        Rescale(stream_durations_[i], moov_->tracks[i].media.header.timescale,
+                moov_->header.timescale);
+    if (duration > moov_->extends.header.fragment_duration)
+      moov_->extends.header.fragment_duration = duration;
   }
-
-  // Set tracks and moov durations.
-  // Note that the updated moov box will be written to output file for VOD case
-  // only.
-  for (std::vector<Track>::iterator track = moov_->tracks.begin();
-       track != moov_->tracks.end();
-       ++track) {
-    track->header.duration = Rescale(track->media.header.duration,
-                                     track->media.header.timescale,
-                                     moov_->header.timescale);
-    if (track->header.duration > moov_->header.duration)
-      moov_->header.duration = track->header.duration;
-  }
-  moov_->extends.header.fragment_duration = moov_->header.duration;
-
   return DoFinalize();
 }
 
-Status Segmenter::AddSample(const MediaStream* stream,
-                            scoped_refptr<MediaSample> sample) {
-  // Find the fragmenter for this stream.
-  DCHECK(stream);
-  DCHECK(stream_map_.find(stream) != stream_map_.end());
-  uint32_t stream_id = stream_map_[stream];
-  Fragmenter* fragmenter = fragmenters_[stream_id];
-
+Status Segmenter::AddSample(size_t stream_id, const MediaSample& sample) {
   // Set default sample duration if it has not been set yet.
   if (moov_->extends.tracks[stream_id].default_sample_duration == 0) {
     moov_->extends.tracks[stream_id].default_sample_duration =
-        sample->duration();
+        sample.duration();
   }
 
+  DCHECK_LT(stream_id, fragmenters_.size());
+  Fragmenter* fragmenter = fragmenters_[stream_id].get();
   if (fragmenter->fragment_finalized()) {
     return Status(error::FRAGMENT_FINALIZED,
                   "Current fragment is finalized already.");
   }
 
-  bool finalize_fragment = false;
-  if (fragmenter->fragment_duration() >=
-      options_.fragment_duration * stream->info()->time_scale()) {
-    if (sample->is_key_frame() || !options_.fragment_sap_aligned) {
-      finalize_fragment = true;
-    }
-  }
-  bool finalize_segment = false;
-  if (segment_durations_[stream_id] >=
-      options_.segment_duration * stream->info()->time_scale()) {
-    if (sample->is_key_frame() || !options_.segment_sap_aligned) {
-      finalize_segment = true;
-      finalize_fragment = true;
-    }
-  }
-
-  Status status;
-  if (finalize_fragment) {
-    status = FinalizeFragment(finalize_segment, fragmenter);
-    if (!status.ok())
-      return status;
-  }
-
-  status = fragmenter->AddSample(sample);
+  Status status = fragmenter->AddSample(sample);
   if (!status.ok())
     return status;
 
   if (sample_duration_ == 0)
-    sample_duration_ = sample->duration();
-  moov_->tracks[stream_id].media.header.duration += sample->duration();
-  segment_durations_[stream_id] += sample->duration();
-  DCHECK_GE(segment_durations_[stream_id], fragmenter->fragment_duration());
+    sample_duration_ = sample.duration();
+  stream_durations_[stream_id] += sample.duration();
   return Status::OK;
 }
 
-uint32_t Segmenter::GetReferenceTimeScale() const {
-  return moov_->header.timescale;
-}
-
-double Segmenter::GetDuration() const {
-  if (moov_->header.timescale == 0) {
-    // Handling the case where this is not properly initialized.
-    return 0.0;
+Status Segmenter::FinalizeSegment(size_t stream_id,
+                                  const SegmentInfo& segment_info) {
+  if (segment_info.key_rotation_encryption_config) {
+    FinalizeFragmentForKeyRotation(
+        stream_id, segment_info.is_encrypted,
+        *segment_info.key_rotation_encryption_config);
   }
 
-  return static_cast<double>(moov_->header.duration) / moov_->header.timescale;
-}
-
-void Segmenter::UpdateProgress(uint64_t progress) {
-  accumulated_progress_ += progress;
-
-  if (!progress_listener_) return;
-  if (progress_target_ == 0) return;
-  // It might happen that accumulated progress exceeds progress_target due to
-  // computation errors, e.g. rounding error. Cap it so it never reports > 100%
-  // progress.
-  if (accumulated_progress_ >= progress_target_) {
-    progress_listener_->OnProgress(1.0);
-  } else {
-    progress_listener_->OnProgress(static_cast<double>(accumulated_progress_) /
-                                   progress_target_);
-  }
-}
-
-void Segmenter::SetComplete() {
-  if (!progress_listener_) return;
-  progress_listener_->OnProgress(1.0);
-}
-
-Status Segmenter::FinalizeSegment() {
-  Status status = DoFinalizeSegment();
-
-  // Reset segment information to initial state.
-  sidx_->references.clear();
-  std::vector<uint64_t>::iterator it = segment_durations_.begin();
-  for (; it != segment_durations_.end(); ++it)
-    *it = 0;
-
-  return status;
-}
-
-uint32_t Segmenter::GetReferenceStreamId() {
-  DCHECK(sidx_);
-  return sidx_->reference_id - 1;
-}
-
-Status Segmenter::FinalizeFragment(bool finalize_segment,
-                                   Fragmenter* fragmenter) {
-  fragmenter->FinalizeFragment();
+  DCHECK_LT(stream_id, fragmenters_.size());
+  Fragmenter* fragmenter = fragmenters_[stream_id].get();
+  DCHECK(fragmenter);
+  Status status = fragmenter->FinalizeFragment();
+  if (!status.ok())
+    return status;
 
   // Check if all tracks are ready for fragmentation.
-  for (std::vector<Fragmenter*>::iterator it = fragmenters_.begin();
-       it != fragmenters_.end();
-       ++it) {
-    if (!(*it)->fragment_finalized())
+  for (const std::unique_ptr<Fragmenter>& fragmenter : fragmenters_) {
+    if (!fragmenter->fragment_finalized())
       return Status::OK;
   }
 
@@ -457,7 +183,7 @@ Status Segmenter::FinalizeFragment(bool finalize_segment,
           sizeof(uint32_t);  // for sample count field in 'senc'
     }
     traf.runs[0].data_offset = data_offset + mdat.data_size;
-    mdat.data_size += fragmenters_[i]->data()->Size();
+    mdat.data_size += static_cast<uint32_t>(fragmenters_[i]->data()->Size());
   }
 
   // Generate segment reference.
@@ -467,19 +193,125 @@ Status Segmenter::FinalizeFragment(bool finalize_segment,
   sidx_->references[sidx_->references.size() - 1].referenced_size =
       data_offset + mdat.data_size;
 
+  const uint64_t moof_start_offset = fragment_buffer_->Size();
+
   // Write the fragment to buffer.
   moof_->Write(fragment_buffer_.get());
   mdat.WriteHeader(fragment_buffer_.get());
-  for (Fragmenter* fragmenter : fragmenters_)
+
+  bool first_key_frame = true;
+  for (const std::unique_ptr<Fragmenter>& fragmenter : fragmenters_) {
+    // https://goo.gl/xcFus6 6. Trick play requirements
+    // 6.10. If using fMP4, I-frame segments must include the 'moof' header
+    // associated with the I-frame. It also implies that only the first key
+    // frame can be included.
+    if (!fragmenter->key_frame_infos().empty() && first_key_frame) {
+      const KeyFrameInfo& key_frame_info =
+          fragmenter->key_frame_infos().front();
+      first_key_frame = false;
+      key_frame_infos_.push_back(
+          {key_frame_info.timestamp, moof_start_offset,
+           fragment_buffer_->Size() - moof_start_offset + key_frame_info.size});
+    }
     fragment_buffer_->AppendBuffer(*fragmenter->data());
+  }
 
   // Increase sequence_number for next fragment.
   ++moof_->header.sequence_number;
 
-  if (finalize_segment)
-    return FinalizeSegment();
-
+  for (std::unique_ptr<Fragmenter>& fragmenter : fragmenters_)
+    fragmenter->ClearFragmentFinalized();
+  if (!segment_info.is_subsegment) {
+    Status status = DoFinalizeSegment();
+    // Reset segment information to initial state.
+    sidx_->references.clear();
+    key_frame_infos_.clear();
+    return status;
+  }
   return Status::OK;
+}
+
+uint32_t Segmenter::GetReferenceTimeScale() const {
+  return moov_->header.timescale;
+}
+
+double Segmenter::GetDuration() const {
+  uint64_t duration = moov_->extends.header.fragment_duration;
+  if (duration == 0) {
+    // Handling the case where this is not properly initialized.
+    return 0.0;
+  }
+  return static_cast<double>(duration) / moov_->header.timescale;
+}
+
+void Segmenter::UpdateProgress(uint64_t progress) {
+  accumulated_progress_ += progress;
+
+  if (!progress_listener_) return;
+  if (progress_target_ == 0) return;
+  // It might happen that accumulated progress exceeds progress_target due to
+  // computation errors, e.g. rounding error. Cap it so it never reports > 100%
+  // progress.
+  if (accumulated_progress_ >= progress_target_) {
+    progress_listener_->OnProgress(1.0);
+  } else {
+    progress_listener_->OnProgress(static_cast<double>(accumulated_progress_) /
+                                   progress_target_);
+  }
+}
+
+void Segmenter::SetComplete() {
+  if (!progress_listener_) return;
+  progress_listener_->OnProgress(1.0);
+}
+
+uint32_t Segmenter::GetReferenceStreamId() {
+  DCHECK(sidx_);
+  return sidx_->reference_id - 1;
+}
+
+void Segmenter::FinalizeFragmentForKeyRotation(
+    size_t stream_id,
+    bool fragment_encrypted,
+    const EncryptionConfig& encryption_config) {
+  if (options_.mp4_params.include_pssh_in_stream) {
+    const std::vector<ProtectionSystemSpecificInfo>& system_info =
+        encryption_config.key_system_info;
+    moof_->pssh.resize(system_info.size());
+    for (size_t i = 0; i < system_info.size(); i++)
+      moof_->pssh[i].raw_box = system_info[i].psshs;
+  } else {
+    LOG(WARNING)
+        << "Key rotation and no pssh in stream may not work well together.";
+  }
+
+  // Skip the following steps if the current fragment is not going to be
+  // encrypted. 'pssh' box needs to be included in the fragment, which is
+  // performed above, regardless of whether the fragment is encrypted. This is
+  // necessary for two reasons: 1) Requesting keys before reaching encrypted
+  // content avoids playback delay due to license requests; 2) In Chrome, CDM
+  // must be initialized before starting the playback and CDM can only be
+  // initialized with a valid 'pssh'.
+  if (!fragment_encrypted)
+    return;
+
+  DCHECK_LT(stream_id, moof_->tracks.size());
+  TrackFragment& traf = moof_->tracks[stream_id];
+  traf.sample_group_descriptions.resize(traf.sample_group_descriptions.size() +
+                                        1);
+  SampleGroupDescription& sample_group_description =
+      traf.sample_group_descriptions.back();
+  sample_group_description.grouping_type = FOURCC_seig;
+
+  sample_group_description.cenc_sample_encryption_info_entries.resize(1);
+  CencSampleEncryptionInfoEntry& sample_group_entry =
+      sample_group_description.cenc_sample_encryption_info_entries.back();
+  sample_group_entry.is_protected = 1;
+  sample_group_entry.per_sample_iv_size = encryption_config.per_sample_iv_size;
+  sample_group_entry.constant_iv = encryption_config.constant_iv;
+  sample_group_entry.crypt_byte_block = encryption_config.crypt_byte_block;
+  sample_group_entry.skip_byte_block = encryption_config.skip_byte_block;
+  sample_group_entry.key_id = encryption_config.key_id;
 }
 
 }  // namespace mp4

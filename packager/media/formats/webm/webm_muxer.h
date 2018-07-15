@@ -4,8 +4,8 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_FORMATS_WEBM_WEBM_MUXER_H_
-#define MEDIA_FORMATS_WEBM_WEBM_MUXER_H_
+#ifndef PACKAGER_MEDIA_FORMATS_WEBM_WEBM_MUXER_H_
+#define PACKAGER_MEDIA_FORMATS_WEBM_WEBM_MUXER_H_
 
 #include "packager/media/base/muxer.h"
 
@@ -24,10 +24,11 @@ class WebMMuxer : public Muxer {
 
  private:
   // Muxer implementation overrides.
-  Status Initialize() override;
+  Status InitializeMuxer() override;
   Status Finalize() override;
-  Status DoAddSample(const MediaStream* stream,
-                     scoped_refptr<MediaSample> sample) override;
+  Status AddSample(size_t stream_id, const MediaSample& sample) override;
+  Status FinalizeSegment(size_t stream_id,
+                         const SegmentInfo& segment_info) override;
 
   void FireOnMediaStartEvent();
   void FireOnMediaEndEvent();
@@ -41,4 +42,4 @@ class WebMMuxer : public Muxer {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_FORMATS_WEBM_WEBM_MUXER_H_
+#endif  // PACKAGER_MEDIA_FORMATS_WEBM_WEBM_MUXER_H_

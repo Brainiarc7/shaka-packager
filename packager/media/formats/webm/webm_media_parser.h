@@ -2,12 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef MEDIA_FORMATS_WEBM_WEBM_MEDIA_PARSER_H_
-#define MEDIA_FORMATS_WEBM_WEBM_MEDIA_PARSER_H_
+#ifndef PACKAGER_MEDIA_FORMATS_WEBM_WEBM_MEDIA_PARSER_H_
+#define PACKAGER_MEDIA_FORMATS_WEBM_WEBM_MEDIA_PARSER_H_
 
 #include "packager/base/callback_forward.h"
 #include "packager/base/compiler_specific.h"
-#include "packager/base/memory/ref_counted.h"
 #include "packager/media/base/byte_queue.h"
 #include "packager/media/base/media_parser.h"
 
@@ -80,4 +79,4 @@ class WebMMediaParser : public MediaParser {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_FORMATS_WEBM_WEBM_MEDIA_PARSER_H_
+#endif  // PACKAGER_MEDIA_FORMATS_WEBM_WEBM_MEDIA_PARSER_H_

@@ -5,7 +5,6 @@
 #include "packager/media/formats/webm/webm_video_client.h"
 
 #include "packager/base/logging.h"
-#include "packager/base/stl_util.h"
 #include "packager/media/codecs/vp_codec_configuration_record.h"
 #include "packager/media/formats/webm/webm_constants.h"
 
@@ -28,12 +27,9 @@ int64_t GetGreatestCommonDivisor(int64_t a, int64_t b) {
 namespace shaka {
 namespace media {
 
-WebMVideoClient::WebMVideoClient() {
-  Reset();
-}
+WebMVideoClient::WebMVideoClient() {}
 
-WebMVideoClient::~WebMVideoClient() {
-}
+WebMVideoClient::~WebMVideoClient() {}
 
 void WebMVideoClient::Reset() {
   pixel_width_ = -1;
@@ -46,12 +42,21 @@ void WebMVideoClient::Reset() {
   display_height_ = -1;
   display_unit_ = -1;
   alpha_mode_ = -1;
+
+  matrix_coefficients_ = -1;
+  bits_per_channel_ = -1;
+  chroma_subsampling_horz_ = -1;
+  chroma_subsampling_vert_ = -1;
+  chroma_siting_horz_ = -1;
+  chroma_siting_vert_ = -1;
+  color_range_ = -1;
+  transfer_characteristics_ = -1;
+  color_primaries_ = -1;
 }
 
-scoped_refptr<VideoStreamInfo> WebMVideoClient::GetVideoStreamInfo(
+std::shared_ptr<VideoStreamInfo> WebMVideoClient::GetVideoStreamInfo(
     int64_t track_num,
     const std::string& codec_id,
-    const std::vector<uint8_t>& codec_private,
     bool is_encrypted) {
   Codec video_codec = kUnknownCodec;
   if (codec_id == "V_VP8") {
@@ -65,11 +70,11 @@ scoped_refptr<VideoStreamInfo> WebMVideoClient::GetVideoStreamInfo(
     video_codec = kCodecVP10;
   } else {
     LOG(ERROR) << "Unsupported video codec_id " << codec_id;
-    return scoped_refptr<VideoStreamInfo>();
+    return std::shared_ptr<VideoStreamInfo>();
   }
 
   if (pixel_width_ <= 0 || pixel_height_ <= 0)
-    return scoped_refptr<VideoStreamInfo>();
+    return std::shared_ptr<VideoStreamInfo>();
 
   // Set crop and display unit defaults if these elements are not present.
   if (crop_bottom_ == -1)
@@ -97,10 +102,10 @@ scoped_refptr<VideoStreamInfo> WebMVideoClient::GetVideoStreamInfo(
       display_height_ = height_after_crop;
   } else if (display_unit_ == 3) {
     if (display_width_ <= 0 || display_height_ <= 0)
-      return scoped_refptr<VideoStreamInfo>();
+      return std::shared_ptr<VideoStreamInfo>();
   } else {
     LOG(ERROR) << "Unsupported display unit type " << display_unit_;
-    return scoped_refptr<VideoStreamInfo>();
+    return std::shared_ptr<VideoStreamInfo>();
   }
   // Calculate sample aspect ratio.
   int64_t sar_x = display_width_ * height_after_crop;
@@ -109,14 +114,55 @@ scoped_refptr<VideoStreamInfo> WebMVideoClient::GetVideoStreamInfo(
   sar_x /= gcd;
   sar_y /= gcd;
 
-  return scoped_refptr<VideoStreamInfo>(new VideoStreamInfo(
-      track_num, kWebMTimeScale, 0, video_codec, std::string(),
-      codec_private.data(), codec_private.size(), width_after_crop,
-      height_after_crop, sar_x, sar_y, 0, 0, std::string(), is_encrypted));
+  return std::make_shared<VideoStreamInfo>(
+      track_num, kWebMTimeScale, 0, video_codec, H26xStreamFormat::kUnSpecified,
+      std::string(), nullptr, 0, width_after_crop, height_after_crop, sar_x,
+      sar_y, 0, 0, std::string(), is_encrypted);
+}
+
+VPCodecConfigurationRecord WebMVideoClient::GetVpCodecConfig(
+    const std::vector<uint8_t>& codec_private) {
+  VPCodecConfigurationRecord vp_config;
+  vp_config.ParseWebM(codec_private);
+  if (matrix_coefficients_ != -1) {
+    vp_config.set_matrix_coefficients(matrix_coefficients_);
+  }
+  if (bits_per_channel_ != -1) {
+    vp_config.set_bit_depth(bits_per_channel_);
+  }
+  if (chroma_subsampling_horz_ != -1 && chroma_subsampling_vert_ != -1) {
+    vp_config.SetChromaSubsampling(chroma_subsampling_horz_,
+                                   chroma_subsampling_vert_);
+  }
+  if (chroma_siting_horz_ != -1 && chroma_siting_vert_ != -1) {
+    vp_config.SetChromaLocation(chroma_siting_horz_, chroma_siting_vert_);
+  }
+  if (color_range_ != -1) {
+    if (color_range_ == 0)
+      vp_config.set_video_full_range_flag(false);
+    else if (color_range_ == 1)
+      vp_config.set_video_full_range_flag(true);
+    // Ignore for other values.
+  }
+  if (transfer_characteristics_ != -1) {
+    vp_config.set_transfer_characteristics(transfer_characteristics_);
+  }
+  if (color_primaries_ != -1) {
+    vp_config.set_color_primaries(color_primaries_);
+  }
+  return vp_config;
+}
+
+WebMParserClient* WebMVideoClient::OnListStart(int id) {
+  return id == kWebMIdColor ? this : WebMParserClient::OnListStart(id);
+}
+
+bool WebMVideoClient::OnListEnd(int id) {
+  return id == kWebMIdColor ? true : WebMParserClient::OnListEnd(id);
 }
 
 bool WebMVideoClient::OnUInt(int id, int64_t val) {
-  int64_t* dst = NULL;
+  int64_t* dst = nullptr;
 
   switch (id) {
     case kWebMIdPixelWidth:
@@ -149,6 +195,37 @@ bool WebMVideoClient::OnUInt(int id, int64_t val) {
     case kWebMIdAlphaMode:
       dst = &alpha_mode_;
       break;
+    case kWebMIdColorMatrixCoefficients:
+      dst = &matrix_coefficients_;
+      break;
+    case kWebMIdColorBitsPerChannel:
+      dst = &bits_per_channel_;
+      break;
+    case kWebMIdColorChromaSubsamplingHorz:
+      dst = &chroma_subsampling_horz_;
+      break;
+    case kWebMIdColorChromaSubsamplingVert:
+      dst = &chroma_subsampling_vert_;
+      break;
+    case kWebMIdColorChromaSitingHorz:
+      dst = &chroma_siting_horz_;
+      break;
+    case kWebMIdColorChromaSitingVert:
+      dst = &chroma_siting_vert_;
+      break;
+    case kWebMIdColorRange:
+      dst = &color_range_;
+      break;
+    case kWebMIdColorTransferCharacteristics:
+      dst = &transfer_characteristics_;
+      break;
+    case kWebMIdColorPrimaries:
+      dst = &color_primaries_;
+      break;
+    case kWebMIdColorMaxCLL:
+    case kWebMIdColorMaxFALL:
+      NOTIMPLEMENTED() << "HDR is not supported yet.";
+      return true;
     default:
       return true;
   }

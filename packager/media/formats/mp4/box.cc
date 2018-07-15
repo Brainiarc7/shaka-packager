@@ -48,7 +48,7 @@ void Box::WriteHeader(BufferWriter* writer) {
 }
 
 uint32_t Box::ComputeSize() {
-  box_size_ = ComputeSizeInternal();
+  box_size_ = static_cast<uint32_t>(ComputeSizeInternal());
   return box_size_;
 }
 
@@ -69,8 +69,8 @@ bool Box::ReadWriteHeaderInternal(BoxBuffer* buffer) {
   return true;
 }
 
-FullBox::FullBox() : version(0), flags(0) {}
-FullBox::~FullBox() {}
+FullBox::FullBox() = default;
+FullBox::~FullBox() = default;
 
 uint32_t FullBox::HeaderSize() const {
   // Additional 1-byte version and 3-byte flags.

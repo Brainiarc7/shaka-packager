@@ -6,8 +6,8 @@
 //
 // Overloads operator== for mp4 boxes, mainly used for testing.
 
-#ifndef MEDIA_FORMATS_MP4_BOX_DEFINITIONS_COMPARISON_H_
-#define MEDIA_FORMATS_MP4_BOX_DEFINITIONS_COMPARISON_H_
+#ifndef PACKAGER_MEDIA_FORMATS_MP4_BOX_DEFINITIONS_COMPARISON_H_
+#define PACKAGER_MEDIA_FORMATS_MP4_BOX_DEFINITIONS_COMPARISON_H_
 
 #include "packager/media/formats/mp4/box_definitions.h"
 
@@ -229,12 +229,8 @@ inline bool operator==(const Language& lhs,
   return lhs.code == rhs.code;
 }
 
-inline bool operator==(const PrivFrame& lhs, const PrivFrame& rhs) {
-  return lhs.owner == rhs.owner && lhs.value == rhs.value;
-}
-
 inline bool operator==(const ID3v2& lhs, const ID3v2& rhs) {
-  return lhs.language == rhs.language && lhs.private_frame == rhs.private_frame;
+  return lhs.language == rhs.language && lhs.id3v2_data == rhs.id3v2_data;
 }
 
 inline bool operator==(const Metadata& lhs, const Metadata& rhs) {
@@ -499,4 +495,4 @@ inline bool operator==(const VTTCueBox& lhs,
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_FORMATS_MP4_BOX_DEFINITIONS_COMPARISON_H_
+#endif  // PACKAGER_MEDIA_FORMATS_MP4_BOX_DEFINITIONS_COMPARISON_H_

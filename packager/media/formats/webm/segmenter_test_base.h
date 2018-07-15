@@ -4,23 +4,23 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_FORMATS_WEBM_SEGMENTER_TEST_UTILS_H_
-#define MEDIA_FORMATS_WEBM_SEGMENTER_TEST_UTILS_H_
+#ifndef PACKAGER_MEDIA_FORMATS_WEBM_SEGMENTER_TEST_UTILS_H_
+#define PACKAGER_MEDIA_FORMATS_WEBM_SEGMENTER_TEST_UTILS_H_
 
 #include <gtest/gtest.h>
 
+#include "packager/file/file_closer.h"
+#include "packager/file/file_test_util.h"
+#include "packager/file/memory_file.h"
 #include "packager/media/base/media_sample.h"
 #include "packager/media/base/muxer_options.h"
-#include "packager/media/base/status.h"
 #include "packager/media/base/stream_info.h"
-#include "packager/media/base/test/status_test_util.h"
 #include "packager/media/base/video_stream_info.h"
-#include "packager/media/file/file_closer.h"
-#include "packager/media/file/file_test_util.h"
-#include "packager/media/file/memory_file.h"
 #include "packager/media/formats/webm/mkv_writer.h"
 #include "packager/media/formats/webm/segmenter.h"
 #include "packager/media/formats/webm/webm_parser.h"
+#include "packager/status.h"
+#include "packager/status_test_util.h"
 
 namespace shaka {
 namespace media {
@@ -46,28 +46,23 @@ class SegmentTestBase : public ::testing::Test {
   template <typename S>
   void CreateAndInitializeSegmenter(
       const MuxerOptions& options,
-      StreamInfo* info,
-      KeySource* key_source,
+      const StreamInfo& info,
       std::unique_ptr<webm::Segmenter>* result) const {
     std::unique_ptr<S> segmenter(new S(options));
 
-    std::unique_ptr<MkvWriter> writer(new MkvWriter());
-    ASSERT_OK(writer->Open(options.output_file_name));
-    ASSERT_OK(segmenter->Initialize(
-        std::move(writer), info, NULL /* progress_listener */,
-        NULL /* muxer_listener */, key_source, 0 /* max_sd_pixels */,
-        1 /* clear_lead_in_seconds */));
+    ASSERT_OK(segmenter->Initialize(info, nullptr /* progress_listener */,
+                                    nullptr /* muxer_listener */));
     *result = std::move(segmenter);
   }
 
   /// Creates a new media sample.
-  scoped_refptr<MediaSample> CreateSample(KeyFrameFlag key_frame_flag,
-                                          uint64_t duration,
-                                          SideDataFlag side_data_flag);
+  std::shared_ptr<MediaSample> CreateSample(KeyFrameFlag key_frame_flag,
+                                            uint64_t duration,
+                                            SideDataFlag side_data_flag);
   /// Creates a Muxer options object for testing.
   MuxerOptions CreateMuxerOptions() const;
   /// Creates a video stream info object for testing.
-  VideoStreamInfo* CreateVideoStreamInfo() const;
+  VideoStreamInfo* CreateVideoStreamInfo(uint32_t time_scale) const;
 
   /// Gets the file name of the current output file.
   std::string OutputFileName() const;
@@ -86,9 +81,10 @@ class SegmentTestBase : public ::testing::Test {
     void PopulateFromCluster(const std::string& file_name);
     void PopulateFromSegment(const std::string& file_name);
 
-    int GetFrameCountForCluster(size_t i) const;
+    size_t GetFrameCountForCluster(size_t cluster_index) const;
+    int64_t GetFrameTimecode(size_t cluster_index, size_t frame_index) const;
 
-    int cluster_count() const;
+    size_t cluster_count() const;
 
    private:
     // WebMParserClient overrides.
@@ -100,18 +96,22 @@ class SegmentTestBase : public ::testing::Test {
     bool OnString(int id, const std::string& str) override;
 
    private:
-    std::vector<int> cluster_sizes_;
-    bool in_cluster_;
+    int64_t cluster_timecode_ = -1;
+    // frame_timecodes_[cluster_index][frame_index].
+    std::vector<std::vector<int64_t>> frame_timecodes_;
+    bool in_cluster_ = false;
   };
 
  protected:
+  void set_cur_timestamp(uint64_t timestamp) { cur_timestamp_ = timestamp; }
+
   std::string output_file_name_;
   std::string segment_template_;
-  uint64_t cur_time_timescale_;
+  uint64_t cur_timestamp_;
   bool single_segment_;
 };
 
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_FORMATS_WEBM_SEGMENTER_TEST_UTILS_H_
+#endif  // PACKAGER_MEDIA_FORMATS_WEBM_SEGMENTER_TEST_UTILS_H_

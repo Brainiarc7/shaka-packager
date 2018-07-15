@@ -16,7 +16,7 @@
 #include "packager/base/logging.h"
 #include "packager/base/strings/string_number_conversions.h"
 #include "packager/media/base/decrypt_config.h"
-#include "packager/media/base/fixed_key_source.h"
+#include "packager/media/base/raw_key_source.h"
 #include "packager/media/base/timestamp.h"
 #include "packager/media/formats/webm/cluster_builder.h"
 #include "packager/media/formats/webm/webm_constants.h"
@@ -91,7 +91,7 @@ const uint16_t kWidth = 320u;
 const uint16_t kHeight = 180u;
 const uint32_t kPixelWidth = 1u;
 const uint32_t kPixelHeight = 1u;
-const int16_t kTrickPlayRate = 0u;
+const int16_t kTrickPlayFactor = 0u;
 const uint8_t kNaluLengthSize = 0u;
 
 // Test duration defaults must differ from parser estimation defaults to know
@@ -177,7 +177,7 @@ const uint8_t kVP9Frame[] = {
     0xe1, 0xe6, 0xef, 0xff, 0xfd, 0xf7, 0x4f, 0x0f,
 };
 
-class MockKeySource : public FixedKeySource {
+class MockKeySource : public RawKeySource {
  public:
   MOCK_METHOD2(GetKey,
                Status(const std::vector<uint8_t>& key_id, EncryptionKey* key));
@@ -230,7 +230,7 @@ std::unique_ptr<Cluster> CreateCluster(int timecode,
 std::unique_ptr<Cluster> CreateCluster(const uint8_t* data, size_t data_size) {
   ClusterBuilder cb;
   cb.SetClusterTimecode(0);
-  cb.AddSimpleBlock(kVideoTrackNum, 0, 0, data, data_size);
+  cb.AddSimpleBlock(kVideoTrackNum, 0, 0, data, static_cast<int>(data_size));
   return cb.Finish();
 }
 
@@ -239,8 +239,8 @@ bool VerifyBuffersHelper(const BufferQueue& audio_buffers,
                          const BufferQueue& text_buffers,
                          const BlockInfo* block_info,
                          int block_count) {
-  int buffer_count = audio_buffers.size() + video_buffers.size() +
-      text_buffers.size();
+  int buffer_count = static_cast<int>(
+      audio_buffers.size() + video_buffers.size() + text_buffers.size());
   if (block_count != buffer_count) {
     LOG(ERROR) << __FUNCTION__ << " : block_count (" << block_count
                << ") mismatches buffer_count (" << buffer_count << ")";
@@ -275,7 +275,7 @@ bool VerifyBuffersHelper(const BufferQueue& audio_buffers,
       return false;
     }
 
-    scoped_refptr<MediaSample> buffer = (*buffers)[(*offset)++];
+    std::shared_ptr<MediaSample> buffer = (*buffers)[(*offset)++];
 
     EXPECT_EQ(block_info[i].timestamp * kMicrosecondsPerMillisecond,
               buffer->pts());
@@ -306,7 +306,7 @@ bool VerifyTextBuffers(const BlockInfo* block_info_ptr,
     EXPECT_FALSE(block_info.use_simple_block);
     EXPECT_FALSE(buffer_iter == buffer_end);
 
-    const scoped_refptr<MediaSample> buffer = *buffer_iter++;
+    const std::shared_ptr<MediaSample> buffer = *buffer_iter++;
     EXPECT_EQ(block_info.timestamp * kMicrosecondsPerMillisecond,
               buffer->pts());
     EXPECT_EQ(std::abs(block_info.duration) * kMicrosecondsPerMillisecond,
@@ -322,16 +322,38 @@ bool VerifyTextBuffers(const BlockInfo* block_info_ptr,
 class WebMClusterParserTest : public testing::Test {
  public:
   WebMClusterParserTest()
-      : audio_stream_info_(new AudioStreamInfo(
-            kAudioTrackNum, kTimeScale, kDuration, kUnknownCodec, kCodecString,
-            kExtraData, kExtraDataSize, kBitsPerSample, kNumChannels,
-            kSamplingFrequency, kSeekPreroll, kCodecDelay, 0, 0, kLanguage,
-            !kEncrypted)),
-        video_stream_info_(new VideoStreamInfo(
-            kVideoTrackNum, kTimeScale, kDuration, kCodecVP8, kCodecString,
-            kExtraData, kExtraDataSize, kWidth, kHeight, kPixelWidth,
-            kPixelHeight, kTrickPlayRate, kNaluLengthSize, kLanguage,
-            !kEncrypted)),
+      : audio_stream_info_(new AudioStreamInfo(kAudioTrackNum,
+                                               kTimeScale,
+                                               kDuration,
+                                               kUnknownCodec,
+                                               kCodecString,
+                                               kExtraData,
+                                               kExtraDataSize,
+                                               kBitsPerSample,
+                                               kNumChannels,
+                                               kSamplingFrequency,
+                                               kSeekPreroll,
+                                               kCodecDelay,
+                                               0,
+                                               0,
+                                               kLanguage,
+                                               !kEncrypted)),
+        video_stream_info_(new VideoStreamInfo(kVideoTrackNum,
+                                               kTimeScale,
+                                               kDuration,
+                                               kCodecVP8,
+                                               H26xStreamFormat::kUnSpecified,
+                                               kCodecString,
+                                               kExtraData,
+                                               kExtraDataSize,
+                                               kWidth,
+                                               kHeight,
+                                               kPixelWidth,
+                                               kPixelHeight,
+                                               kTrickPlayFactor,
+                                               kNaluLengthSize,
+                                               kLanguage,
+                                               !kEncrypted)),
         parser_(CreateDefaultParser()) {}
 
  protected:
@@ -349,12 +371,12 @@ class WebMClusterParserTest : public testing::Test {
         default_audio_duration, default_video_duration));
   }
 
-  void InitEvent(const std::vector<scoped_refptr<StreamInfo>>& stream_info) {
+  void InitEvent(const std::vector<std::shared_ptr<StreamInfo>>& stream_info) {
     streams_from_init_event_ = stream_info;
   }
 
   bool NewSampleEvent(uint32_t track_id,
-                      const scoped_refptr<MediaSample>& sample) {
+                      const std::shared_ptr<MediaSample>& sample) {
     switch (track_id) {
       case kAudioTrackNum:
         audio_buffers_.push_back(sample);
@@ -385,8 +407,9 @@ class WebMClusterParserTest : public testing::Test {
     video_stream_info_->set_codec(video_codec);
     return new WebMClusterParser(
         kTimecodeScale, audio_stream_info_, video_stream_info_,
-        audio_default_duration, video_default_duration, text_tracks,
-        ignored_tracks, audio_encryption_key_id, video_encryption_key_id,
+        VPCodecConfigurationRecord(), audio_default_duration,
+        video_default_duration, text_tracks, ignored_tracks,
+        audio_encryption_key_id, video_encryption_key_id,
         base::Bind(&WebMClusterParserTest::NewSampleEvent,
                    base::Unretained(this)),
         init_cb, &mock_key_source_);
@@ -448,10 +471,10 @@ class WebMClusterParserTest : public testing::Test {
     return result;
   }
 
-  scoped_refptr<AudioStreamInfo> audio_stream_info_;
-  scoped_refptr<VideoStreamInfo> video_stream_info_;
+  std::shared_ptr<AudioStreamInfo> audio_stream_info_;
+  std::shared_ptr<VideoStreamInfo> video_stream_info_;
   std::unique_ptr<WebMClusterParser> parser_;
-  std::vector<scoped_refptr<StreamInfo>> streams_from_init_event_;
+  std::vector<std::shared_ptr<StreamInfo>> streams_from_init_event_;
   BufferQueue audio_buffers_;
   BufferQueue video_buffers_;
   TextBufferQueueMap text_buffers_map_;
@@ -799,7 +822,7 @@ TEST_F(WebMClusterParserTest, ParseVP8) {
   ASSERT_EQ(2u, streams_from_init_event_.size());
   EXPECT_EQ(kStreamAudio, streams_from_init_event_[0]->stream_type());
   EXPECT_EQ(kStreamVideo, streams_from_init_event_[1]->stream_type());
-  EXPECT_EQ("vp08.01.00.08.01.01.00.00",
+  EXPECT_EQ("vp08.01.10.08.01.02.02.02.00",
             streams_from_init_event_[1]->codec_string());
 }
 
@@ -813,7 +836,7 @@ TEST_F(WebMClusterParserTest, ParseVP9) {
   ASSERT_EQ(2u, streams_from_init_event_.size());
   EXPECT_EQ(kStreamAudio, streams_from_init_event_[0]->stream_type());
   EXPECT_EQ(kStreamVideo, streams_from_init_event_[1]->stream_type());
-  EXPECT_EQ("vp09.03.00.12.00.03.00.00",
+  EXPECT_EQ("vp09.03.10.12.03.02.02.02.00",
             streams_from_init_event_[1]->codec_string());
 }
 
@@ -837,7 +860,7 @@ TEST_F(WebMClusterParserTest, ParseEncryptedBlock) {
   EXPECT_EQ(cluster->size(), result);
   EXPECT_TRUE(parser_->Flush());
   ASSERT_EQ(1UL, video_buffers_.size());
-  scoped_refptr<MediaSample> buffer = video_buffers_[0];
+  std::shared_ptr<MediaSample> buffer = video_buffers_[0];
   EXPECT_EQ(std::vector<uint8_t>(
                 kExpectedDecryptedFrame,
                 kExpectedDecryptedFrame + arraysize(kExpectedDecryptedFrame)),
@@ -879,7 +902,7 @@ TEST_F(WebMClusterParserTest, ParseClearFrameInEncryptedTrack) {
   EXPECT_EQ(cluster->size(), result);
   EXPECT_TRUE(parser_->Flush());
   ASSERT_EQ(1UL, video_buffers_.size());
-  scoped_refptr<MediaSample> buffer = video_buffers_[0];
+  std::shared_ptr<MediaSample> buffer = video_buffers_[0];
   EXPECT_EQ(std::vector<uint8_t>(
                 kExpectedClearFrame,
                 kExpectedClearFrame + arraysize(kExpectedClearFrame)),

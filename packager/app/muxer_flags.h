@@ -11,15 +11,13 @@
 
 #include <gflags/gflags.h>
 
-DECLARE_string(profile);
 DECLARE_double(clear_lead);
-DECLARE_bool(single_segment);
 DECLARE_double(segment_duration);
 DECLARE_bool(segment_sap_aligned);
 DECLARE_double(fragment_duration);
 DECLARE_bool(fragment_sap_aligned);
-DECLARE_int32(num_subsegments_per_sidx);
+DECLARE_bool(generate_sidx_in_media_segments);
 DECLARE_string(temp_dir);
-DECLARE_bool(webm_subsample_encryption);
+DECLARE_bool(mp4_include_pssh_in_stream);
 
 #endif  // APP_MUXER_FLAGS_H_

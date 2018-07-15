@@ -2,40 +2,29 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "packager/media/formats/webm/single_segment_segmenter.h"
 #include "packager/media/formats/webm/two_pass_single_segment_segmenter.h"
 
 #include <gtest/gtest.h>
 #include <memory>
-#include "packager/media/base/fixed_key_source.h"
 #include "packager/media/formats/webm/segmenter_test_base.h"
 
 namespace shaka {
 namespace media {
 namespace {
 
-const uint64_t kDuration = 1000;
-const std::string kKeyId = "4c6f72656d20697073756d20646f6c6f";
-const std::string kIv = "0123456789012345";
-const std::string kKey = "01234567890123456789012345678901";
-const std::string kPsshData = "";
+const uint32_t kTimeScale = 1000000u;
+const uint64_t kDuration = 1000000u;
+const bool kSubsegment = true;
+const uint8_t kPerSampleIvSize = 8u;
+const uint8_t kKeyId[] = {
+    0x4c, 0x6f, 0x72, 0x65, 0x6d, 0x20, 0x69, 0x70,
+    0x73, 0x75, 0x6d, 0x20, 0x64, 0x6f, 0x6c, 0x6f,
+};
+const uint8_t kIv[] = {
+    0x01, 0x23, 0x45, 0x67, 0x89, 0x01, 0x23, 0x45,
+};
 const uint8_t kBasicSupportData[] = {
-  // ID: EBML Header, Payload Size: 31
-  0x1a, 0x45, 0xdf, 0xa3, 0x9f,
-    // EBMLVersion: 1
-    0x42, 0x86, 0x81, 0x01,
-    // EBMLReadVersion: 1
-    0x42, 0xf7, 0x81, 0x01,
-    // EBMLMaxIDLength: 4
-    0x42, 0xf2, 0x81, 0x04,
-    // EBMLMaxSizeLength: 8
-    0x42, 0xf3, 0x81, 0x08,
-    // DocType: 'webm'
-    0x42, 0x82, 0x84, 0x77, 0x65, 0x62, 0x6d,
-    // DocTypeVersion: 2
-    0x42, 0x87, 0x81, 0x02,
-    // DocTypeReadVersion: 2
-    0x42, 0x85, 0x81, 0x02,
+  // ID: EBML Header omitted.
   // ID: Segment, Payload Size: 432
   0x18, 0x53, 0x80, 0x67, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xb0,
     // ID: SeekHead, Payload Size: 58
@@ -54,16 +43,16 @@ const uint8_t kBasicSupportData[] = {
         0x53, 0xac, 0x81, 0xb6,
       // ID: Seek, Payload Size: 12
       0x4d, 0xbb, 0x8c,
-        // SeekID: binary(4) (Cluster)
-        0x53, 0xab, 0x84, 0x1f, 0x43, 0xb6, 0x75,
+        // SeekID: binary(4) (Cues)
+        0x53, 0xab, 0x84, 0x1c, 0x53, 0xbb, 0x6b,
         // SeekPosition: 279
         0x53, 0xac, 0x82, 0x01, 0x17,
       // ID: Seek, Payload Size: 12
       0x4d, 0xbb, 0x8c,
-        // SeekID: binary(4) (Cues)
-        0x53, 0xab, 0x84, 0x1c, 0x53, 0xbb, 0x6b,
-        // SeekPosition: 398
-        0x53, 0xac, 0x82, 0x01, 0x8e,
+        // SeekID: binary(4) (Cluster)
+        0x53, 0xab, 0x84, 0x1f, 0x43, 0xb6, 0x75,
+        // SeekPosition: 313
+        0x53, 0xac, 0x82, 0x01, 0x39,
     // ID: Void, Payload Size: 24
     0xec, 0x98, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -130,6 +119,28 @@ const uint8_t kBasicSupportData[] = {
           0x54, 0xb0, 0x81, 0x64,
           // DisplayHeight: 100
           0x54, 0xba, 0x81, 0x64,
+    // ID: Cues, Payload Size: 29
+    0x1c, 0x53, 0xbb, 0x6b, 0x9d,
+      // ID: CuePoint, Payload Size: 12
+      0xbb, 0x8c,
+        // CueTime: 0
+        0xb3, 0x81, 0x00,
+        // ID: CueTrackPositions, Payload Size: 7
+        0xb7, 0x87,
+          // CueTrack: 1
+          0xf7, 0x81, 0x01,
+          // CueClusterPosition: 313
+          0xf1, 0x82, 0x01, 0x39,
+      // ID: CuePoint, Payload Size: 13
+      0xbb, 0x8d,
+        // CueTime: 3000
+        0xb3, 0x82, 0x0b, 0xb8,
+        // ID: CueTrackPositions, Payload Size: 7
+        0xb7, 0x87,
+          // CueTrack: 1
+          0xf7, 0x81, 0x01,
+          // CueClusterPosition: 370
+          0xf1, 0x82, 0x01, 0x72,
     // ID: Cluster, Payload Size: 45
     0x1f, 0x43, 0xb6, 0x75, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2d,
       // Timecode: 0
@@ -167,7 +178,7 @@ const uint8_t kBasicSupportData[] = {
         // IV:
         0x01, 0x23, 0x45, 0x67, 0x89, 0x01, 0x23, 0x45,
         // Frame Data:
-        0xcc, 0x03, 0xef, 0xc4, 0xf4,
+        0xde, 0xad, 0xbe, 0xef, 0x00,
       // ID: BlockGroup, Payload Size: 24
       0xa0, 0x98,
         // ID: Block, Payload Size: 18
@@ -175,71 +186,64 @@ const uint8_t kBasicSupportData[] = {
           // Signal Byte: Encrypted
           0x01,
           // IV:
-          0x01, 0x23, 0x45, 0x67, 0x89, 0x01, 0x23, 0x46,
+          0x01, 0x23, 0x45, 0x67, 0x89, 0x01, 0x23, 0x45,
           // Frame Data:
-          0xbf, 0x38, 0x72, 0x20, 0xac,
+          0xde, 0xad, 0xbe, 0xef, 0x00,
         // BlockDuration: 1000
         0x9b, 0x82, 0x03, 0xe8,
-    // ID: Cues, Payload Size: 29
-    0x1c, 0x53, 0xbb, 0x6b, 0x9d,
-      // ID: CuePoint, Payload Size: 12
-      0xbb, 0x8c,
-        // CueTime: 0
-        0xb3, 0x81, 0x00,
-        // ID: CueTrackPositions, Payload Size: 7
-        0xb7, 0x87,
-          // CueTrack: 1
-          0xf7, 0x81, 0x01,
-          // CueClusterPosition: 279
-          0xf1, 0x82, 0x01, 0x17,
-      // ID: CuePoint, Payload Size: 13
-      0xbb, 0x8d,
-        // CueTime: 3000
-        0xb3, 0x82, 0x0b, 0xb8,
-        // ID: CueTrackPositions, Payload Size: 7
-        0xb7, 0x87,
-          // CueTrack: 1
-          0xf7, 0x81, 0x01,
-          // CueClusterPosition: 336
-          0xf1, 0x82, 0x01, 0x50,
 };
 
 }  // namespace
 
-class EncrypedSegmenterTest : public SegmentTestBase {
+class EncryptedSegmenterTest : public SegmentTestBase {
  public:
-  EncrypedSegmenterTest() : info_(CreateVideoStreamInfo()) {}
+  EncryptedSegmenterTest() : info_(CreateVideoStreamInfo(kTimeScale)) {
+    EncryptionConfig encryption_config;
+    encryption_config.per_sample_iv_size = kPerSampleIvSize;
+    encryption_config.key_id.assign(kKeyId, kKeyId + sizeof(kKeyId));
+    info_->set_is_encrypted(true);
+    info_->set_encryption_config(encryption_config);
+  }
 
  protected:
   void InitializeSegmenter(const MuxerOptions& options) {
-    key_source_ =
-        FixedKeySource::CreateFromHexStrings(kKeyId, kKey, kPsshData, kIv);
     ASSERT_NO_FATAL_FAILURE(
-        CreateAndInitializeSegmenter<webm::SingleSegmentSegmenter>(
-            options, info_.get(), key_source_.get(), &segmenter_));
+        CreateAndInitializeSegmenter<webm::TwoPassSingleSegmentSegmenter>(
+            options, *info_, &segmenter_));
   }
 
-  scoped_refptr<StreamInfo> info_;
+  std::shared_ptr<StreamInfo> info_;
   std::unique_ptr<webm::Segmenter> segmenter_;
-  std::unique_ptr<KeySource> key_source_;
 };
 
-TEST_F(EncrypedSegmenterTest, BasicSupport) {
+TEST_F(EncryptedSegmenterTest, BasicSupport) {
   MuxerOptions options = CreateMuxerOptions();
-  options.segment_duration = 3.0;
   ASSERT_NO_FATAL_FAILURE(InitializeSegmenter(options));
 
   // Write the samples to the Segmenter.
   // There should be 2 segments with the first segment in clear and the second
   // segment encrypted.
   for (int i = 0; i < 5; i++) {
-    scoped_refptr<MediaSample> sample =
+    if (i == 3) {
+      ASSERT_OK(segmenter_->FinalizeSegment(0, 3 * kDuration, !kSubsegment));
+    }
+    std::shared_ptr<MediaSample> sample =
         CreateSample(kKeyFrame, kDuration, kNoSideData);
-    ASSERT_OK(segmenter_->AddSample(sample));
+    if (i >= 3) {
+      sample->set_is_encrypted(true);
+      std::unique_ptr<DecryptConfig> decrypt_config(
+          new DecryptConfig(info_->encryption_config().key_id,
+                            std::vector<uint8_t>(kIv, kIv + sizeof(kIv)),
+                            std::vector<SubsampleEntry>()));
+      sample->set_decrypt_config(std::move(decrypt_config));
+    }
+    ASSERT_OK(segmenter_->AddSample(*sample));
   }
+  ASSERT_OK(
+      segmenter_->FinalizeSegment(3 * kDuration, 2 * kDuration, !kSubsegment));
   ASSERT_OK(segmenter_->Finalize());
 
-  ASSERT_FILE_EQ(OutputFileName().c_str(), kBasicSupportData);
+  ASSERT_FILE_ENDS_WITH(OutputFileName().c_str(), kBasicSupportData);
 }
 
 }  // namespace media

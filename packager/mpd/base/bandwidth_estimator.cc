@@ -6,58 +6,41 @@
 
 #include "packager/mpd/base/bandwidth_estimator.h"
 
+#include <algorithm>
 #include <cmath>
-#include <cstdlib>
 
 #include "packager/base/logging.h"
 
-const int BandwidthEstimator::kUseAllBlocks = 0;
+namespace shaka {
 
-BandwidthEstimator::BandwidthEstimator(int num_blocks)
-    : num_blocks_for_estimation_(num_blocks),
-      harmonic_mean_denominator_(0.0),
-      num_blocks_added_(0) {}
-BandwidthEstimator::~BandwidthEstimator() {}
+BandwidthEstimator::BandwidthEstimator() = default;
+BandwidthEstimator::~BandwidthEstimator() = default;
 
-void BandwidthEstimator::AddBlock(uint64_t size, double duration) {
-  DCHECK_GT(duration, 0.0);
-  DCHECK_GT(size, 0u);
-
-  if (num_blocks_for_estimation_ < 0 &&
-      static_cast<int>(history_.size()) >= -1 * num_blocks_for_estimation_) {
-    // Short circuiting the case where |num_blocks_for_estimation_| number of
-    // blocks have been added already.
+void BandwidthEstimator::AddBlock(uint64_t size_in_bytes, double duration) {
+  if (size_in_bytes == 0 || duration == 0) {
+    LOG(WARNING) << "Ignore block with size=" << size_in_bytes
+                 << ", duration=" << duration;
     return;
   }
 
   const int kBitsInByte = 8;
-  const double bits_per_second_reciprocal = duration / (kBitsInByte * size);
-  harmonic_mean_denominator_ += bits_per_second_reciprocal;
-  if (num_blocks_for_estimation_ == kUseAllBlocks) {
-    DCHECK_EQ(history_.size(), 0u);
-    ++num_blocks_added_;
-    return;
-  }
+  const uint64_t size_in_bits = size_in_bytes * kBitsInByte;
+  total_size_in_bits_ += size_in_bits;
 
-  history_.push_back(bits_per_second_reciprocal);
-  if (num_blocks_for_estimation_ > 0 &&
-      static_cast<int>(history_.size()) > num_blocks_for_estimation_) {
-    harmonic_mean_denominator_ -= history_.front();
-    history_.pop_front();
-  }
+  total_duration_ += duration;
 
-  DCHECK_NE(num_blocks_for_estimation_, kUseAllBlocks);
-  DCHECK_LE(static_cast<int>(history_.size()), abs(num_blocks_for_estimation_));
-  DCHECK_EQ(num_blocks_added_, 0u);
-  return;
+  const uint64_t bitrate = static_cast<uint64_t>(ceil(size_in_bits / duration));
+  max_bitrate_ = std::max(bitrate, max_bitrate_);
 }
 
 uint64_t BandwidthEstimator::Estimate() const {
-  if (harmonic_mean_denominator_ == 0.0)
+  if (total_duration_ == 0)
     return 0;
-
-  const uint64_t num_blocks = num_blocks_for_estimation_ == kUseAllBlocks
-                                  ? num_blocks_added_
-                                  : history_.size();
-  return static_cast<uint64_t>(ceil(num_blocks / harmonic_mean_denominator_));
+  return static_cast<uint64_t>(ceil(total_size_in_bits_ / total_duration_));
 }
+
+uint64_t BandwidthEstimator::Max() const {
+  return max_bitrate_;
+}
+
+}  // namespace shaka

@@ -44,7 +44,7 @@ class BoxDefinitionsTestGeneral : public testing::Test {
     // Create a fake skip box contains the buffer and Write it.
     BufferWriter buffer;
     buffer.Swap(buffer_.get());
-    uint32_t skip_box_size = buffer.Size() + kBoxSize;
+    uint32_t skip_box_size = static_cast<uint32_t>(buffer.Size() + kBoxSize);
     buffer_->AppendInt(skip_box_size);
     buffer_->AppendInt(static_cast<uint32_t>(FOURCC_skip));
     buffer_->AppendBuffer(buffer);
@@ -309,13 +309,12 @@ class BoxDefinitionsTestGeneral : public testing::Test {
 
   void Fill(ID3v2* id3v2) {
     id3v2->language.code = "eng";
-    id3v2->private_frame.owner = "shaka-packager";
-    id3v2->private_frame.value = "version 1.2.0-debug";
+    id3v2->id3v2_data.assign(std::begin(kData16Bytes), std::end(kData16Bytes));
   }
 
   void Modify(ID3v2* id3v2) {
     id3v2->language.code = "fre";
-    id3v2->private_frame.value = "version 1.3.1-release";
+    id3v2->id3v2_data.assign(std::begin(kData8Bytes), std::end(kData8Bytes));
   }
 
   void Fill(Metadata* metadata) {
@@ -374,7 +373,7 @@ class BoxDefinitionsTestGeneral : public testing::Test {
   void Fill(ElementaryStreamDescriptor* esds) {
     const uint8_t kDecoderSpecificInfo[] = {18, 16};
     esds->es_descriptor.set_esid(1);
-    esds->es_descriptor.set_object_type(kISO_14496_3);
+    esds->es_descriptor.set_object_type(ObjectType::kISO_14496_3);
     std::vector<uint8_t> decoder_specific_info(
         kDecoderSpecificInfo,
         kDecoderSpecificInfo + sizeof(kDecoderSpecificInfo));
@@ -432,6 +431,16 @@ class BoxDefinitionsTestGeneral : public testing::Test {
   void Modify(OpusSpecific* dops) {
     dops->opus_identification_header.resize(
         dops->opus_identification_header.size() - 1);
+  }
+
+  void Fill(FlacSpecific* dfla) {
+    const uint8_t kFlacData[] = {0x50, 0x11, 0x60};
+    dfla->data.assign(std::begin(kFlacData), std::end(kFlacData));
+  }
+
+  void Modify(FlacSpecific* dfla) {
+    const uint8_t kFlacData[] = {0x50, 0x11, 0x40};
+    dfla->data.assign(std::begin(kFlacData), std::end(kFlacData));
   }
 
   void Fill(AudioSampleEntry* enca) {
@@ -1227,6 +1236,21 @@ TEST_F(BoxDefinitionsTest, OpusSampleEntry) {
   entry.samplesize = 16;
   entry.samplerate = 48000;
   Fill(&entry.dops);
+  entry.Write(this->buffer_.get());
+
+  AudioSampleEntry entry_readback;
+  ASSERT_TRUE(ReadBack(&entry_readback));
+  ASSERT_EQ(entry, entry_readback);
+}
+
+TEST_F(BoxDefinitionsTest, FlacSampleEntry) {
+  AudioSampleEntry entry;
+  entry.format = FOURCC_fLaC;
+  entry.data_reference_index = 2;
+  entry.channelcount = 5;
+  entry.samplesize = 16;
+  entry.samplerate = 44100;
+  Fill(&entry.dfla);
   entry.Write(this->buffer_.get());
 
   AudioSampleEntry entry_readback;

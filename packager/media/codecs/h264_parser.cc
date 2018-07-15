@@ -6,8 +6,14 @@
 
 #include <memory>
 #include "packager/base/logging.h"
-#include "packager/base/stl_util.h"
 #include "packager/media/base/buffer_reader.h"
+
+#define LOG_ERROR_ONCE(msg)             \
+  do {                                  \
+    static bool logged_once = false;    \
+    LOG_IF(ERROR, !logged_once) << msg; \
+    logged_once = true;                 \
+  } while (0)
 
 namespace shaka {
 namespace media {
@@ -184,17 +190,14 @@ static_assert(arraysize(kTableSarWidth) == arraysize(kTableSarHeight),
 
 H264Parser::H264Parser() {}
 
-H264Parser::~H264Parser() {
-  STLDeleteValues(&active_SPSes_);
-  STLDeleteValues(&active_PPSes_);
-}
+H264Parser::~H264Parser() {}
 
 const H264Pps* H264Parser::GetPps(int pps_id) {
-  return active_PPSes_[pps_id];
+  return active_PPSes_[pps_id].get();
 }
 
 const H264Sps* H264Parser::GetSps(int sps_id) {
-  return active_SPSes_[sps_id];
+  return active_SPSes_[sps_id].get();
 }
 
 // Default scaling lists (per spec).
@@ -702,8 +705,7 @@ H264Parser::Result H264Parser::ParseSps(const Nalu& nalu, int* sps_id) {
 
   // If an SPS with the same id already exists, replace it.
   *sps_id = sps->seq_parameter_set_id;
-  delete active_SPSes_[*sps_id];
-  active_SPSes_[*sps_id] = sps.release();
+  active_SPSes_[*sps_id] = std::move(sps);
 
   return kOk;
 }
@@ -732,7 +734,7 @@ H264Parser::Result H264Parser::ParsePps(const Nalu& nalu, int* pps_id) {
 
   READ_UE_OR_RETURN(&pps->num_slice_groups_minus1);
   if (pps->num_slice_groups_minus1 > 1) {
-    DVLOG(1) << "Slice groups not supported";
+    LOG_ERROR_ONCE("Slice groups not supported");
     return kUnsupportedStream;
   }
 
@@ -776,8 +778,7 @@ H264Parser::Result H264Parser::ParsePps(const Nalu& nalu, int* pps_id) {
 
   // If a PPS with the same id already exists, replace it.
   *pps_id = pps->pic_parameter_set_id;
-  delete active_PPSes_[*pps_id];
-  active_PPSes_[*pps_id] = pps.release();
+  active_PPSes_[*pps_id] = std::move(pps);
 
   return kOk;
 }
@@ -864,8 +865,8 @@ H264Parser::Result H264Parser::ParseWeightingFactors(
   int def_chroma_weight = 1 << chroma_log2_weight_denom;
 
   for (int i = 0; i < num_ref_idx_active_minus1 + 1; ++i) {
-    READ_BOOL_OR_RETURN(&w_facts->luma_weight_flag);
-    if (w_facts->luma_weight_flag) {
+    READ_BOOL_OR_RETURN(&w_facts->luma_weight_flag[i]);
+    if (w_facts->luma_weight_flag[i]) {
       READ_SE_OR_RETURN(&w_facts->luma_weight[i]);
       IN_RANGE_OR_RETURN(w_facts->luma_weight[i], -128, 127);
 
@@ -877,8 +878,8 @@ H264Parser::Result H264Parser::ParseWeightingFactors(
     }
 
     if (chroma_array_type != 0) {
-      READ_BOOL_OR_RETURN(&w_facts->chroma_weight_flag);
-      if (w_facts->chroma_weight_flag) {
+      READ_BOOL_OR_RETURN(&w_facts->chroma_weight_flag[i]);
+      if (w_facts->chroma_weight_flag[i]) {
         for (int j = 0; j < 2; ++j) {
           READ_SE_OR_RETURN(&w_facts->chroma_weight[i][j]);
           IN_RANGE_OR_RETURN(w_facts->chroma_weight[i][j], -128, 127);
@@ -968,7 +969,7 @@ H264Parser::Result H264Parser::ParseDecRefPicMarking(H26xBitReader* br,
       }
 
       if (i == arraysize(shdr->ref_pic_marking)) {
-        DVLOG(1) << "Ran out of dec ref pic marking fields";
+        LOG_ERROR_ONCE("Ran out of dec ref pic marking fields");
         return kUnsupportedStream;
       }
     }
@@ -991,8 +992,8 @@ H264Parser::Result H264Parser::ParseSliceHeader(const Nalu& nalu,
 
   shdr->idr_pic_flag = (nalu.type() == 5);
   shdr->nal_ref_idc = nalu.ref_idc();
-  shdr->nalu_data = nalu.data() + nalu.header_size();
-  shdr->nalu_size = nalu.payload_size();
+  shdr->nalu_data = nalu.data();
+  shdr->nalu_size = nalu.header_size() + nalu.payload_size();
 
   READ_UE_OR_RETURN(&shdr->first_mb_in_slice);
   READ_UE_OR_RETURN(&shdr->slice_type);
@@ -1007,7 +1008,7 @@ H264Parser::Result H264Parser::ParseSliceHeader(const Nalu& nalu,
   TRUE_OR_RETURN(sps);
 
   if (sps->separate_colour_plane_flag) {
-    DVLOG(1) << "Interlaced streams not supported";
+    LOG_ERROR_ONCE("Interlaced streams not supported");
     return kUnsupportedStream;
   }
 
@@ -1015,7 +1016,7 @@ H264Parser::Result H264Parser::ParseSliceHeader(const Nalu& nalu,
   if (!sps->frame_mbs_only_flag) {
     READ_BOOL_OR_RETURN(&shdr->field_pic_flag);
     if (shdr->field_pic_flag) {
-      DVLOG(1) << "Interlaced streams not supported";
+      LOG_ERROR_ONCE("Interlaced streams not supported");
       return kUnsupportedStream;
     }
   }
@@ -1118,13 +1119,11 @@ H264Parser::Result H264Parser::ParseSliceHeader(const Nalu& nalu,
   }
 
   if (pps->num_slice_groups_minus1 > 0) {
-    DVLOG(1) << "Slice groups not supported";
+    LOG_ERROR_ONCE("Slice groups not supported");
     return kUnsupportedStream;
   }
 
-  size_t epb = br->NumEmulationPreventionBytesRead();
-  shdr->header_bit_size = (shdr->nalu_size - epb) * 8 - br->NumBitsLeft();
-
+  shdr->header_bit_size = nalu.payload_size() * 8 - br->NumBitsLeft();
   return kOk;
 }
 

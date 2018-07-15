@@ -17,14 +17,12 @@ const uint32_t kTsTimescale = 90000;
 TsMuxer::TsMuxer(const MuxerOptions& muxer_options) : Muxer(muxer_options) {}
 TsMuxer::~TsMuxer() {}
 
-Status TsMuxer::Initialize() {
+Status TsMuxer::InitializeMuxer() {
   if (streams().size() > 1u)
     return Status(error::MUXER_FAILURE, "Cannot handle more than one streams.");
 
   segmenter_.reset(new TsSegmenter(options(), muxer_listener()));
-  Status status =
-      segmenter_->Initialize(*streams()[0]->info(), encryption_key_source(),
-                             max_sd_pixels(), clear_lead_in_seconds());
+  Status status = segmenter_->Initialize(*streams()[0]);
   FireOnMediaStartEvent();
   return status;
 }
@@ -34,16 +32,25 @@ Status TsMuxer::Finalize() {
   return segmenter_->Finalize();
 }
 
-Status TsMuxer::DoAddSample(const MediaStream* stream,
-                            scoped_refptr<MediaSample> sample) {
+Status TsMuxer::AddSample(size_t stream_id, const MediaSample& sample) {
+  DCHECK_EQ(stream_id, 0u);
   return segmenter_->AddSample(sample);
+}
+
+Status TsMuxer::FinalizeSegment(size_t stream_id,
+                                const SegmentInfo& segment_info) {
+  DCHECK_EQ(stream_id, 0u);
+  return segment_info.is_subsegment
+             ? Status::OK
+             : segmenter_->FinalizeSegment(segment_info.start_timestamp,
+                                           segment_info.duration);
 }
 
 void TsMuxer::FireOnMediaStartEvent() {
   if (!muxer_listener())
     return;
-  muxer_listener()->OnMediaStart(options(), *streams().front()->info(),
-                                 kTsTimescale, MuxerListener::kContainerWebM);
+  muxer_listener()->OnMediaStart(options(), *streams().front(), kTsTimescale,
+                                 MuxerListener::kContainerMpeg2ts);
 }
 
 void TsMuxer::FireOnMediaEndEvent() {
@@ -51,11 +58,9 @@ void TsMuxer::FireOnMediaEndEvent() {
     return;
 
   // For now, there is no single file TS segmenter. So all the values passed
-  // here are false and 0. Called just to notify the MuxerListener.
-  const bool kHasInitRange = true;
-  const bool kHasIndexRange = true;
-  muxer_listener()->OnMediaEnd(!kHasInitRange, 0, 0, !kHasIndexRange, 0, 0, 0,
-                               0);
+  // here are left empty.
+  MuxerListener::MediaRanges range;
+  muxer_listener()->OnMediaEnd(range, 0);
 }
 
 }  // namespace mp2t

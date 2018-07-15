@@ -35,10 +35,7 @@ class MpdNotifierFactory {
   virtual ~MpdNotifierFactory() {}
 
   virtual std::unique_ptr<MpdNotifier> Create(
-      DashProfile dash_profile,
-      const MpdOptions& mpd_options,
-      const std::vector<std::string>& base_urls,
-      const std::string& output_path) = 0;
+      const MpdOptions& mpd_options) = 0;
 };
 
 // An instance of this class takes a set of MediaInfo files and generates an
@@ -58,8 +55,7 @@ class MpdWriter {
   // MediaInfo, i.e. the content should be a result of using
   // google::protobuf::TestFormat::Print*() methods.
   // If necessary, this method can be called after WriteMpd*() methods.
-  bool AddFile(const std::string& media_info_path,
-               const std::string& mpd_path);
+  bool AddFile(const std::string& media_info_path);
 
   // |base_url| will be used for <BaseURL> element for the MPD. The BaseURL
   // element will be a direct child element of the <MPD> element.

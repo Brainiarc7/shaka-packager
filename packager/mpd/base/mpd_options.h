@@ -9,28 +9,30 @@
 
 #include <string>
 
+#include "packager/mpd/public/mpd_params.h"
+
 namespace shaka {
+
+enum class DashProfile {
+  kUnknown,
+  kOnDemand,
+  kLive,
+};
+
+enum class MpdType { kStatic, kDynamic };
 
 /// Defines Mpd Options.
 struct MpdOptions {
-  MpdOptions()
-      : availability_time_offset(0),
-        minimum_update_period(0),
-        // TODO(tinskip): Set min_buffer_time in unit tests rather than here.
-        min_buffer_time(2.0),
-        time_shift_buffer_depth(0),
-        suggested_presentation_delay(0) {}
-
-  ~MpdOptions() {};
-
-  double availability_time_offset;
-  double minimum_update_period;
-  double min_buffer_time;
-  double time_shift_buffer_depth;
-  double suggested_presentation_delay;
+  DashProfile dash_profile = DashProfile::kOnDemand;
+  MpdType mpd_type = MpdType::kStatic;
+  MpdParams mpd_params;
+  /// This is the target segment duration requested by the user. The actual
+  /// segment duration may be different to the target segment duration.
+  /// This parameter is included here to calculate the approximate
+  /// SegmentTimeline if it is enabled.
+  double target_segment_duration = 0;
 };
 
 }  // namespace shaka
 
 #endif  // MPD_BASE_MPD_OPTIONS_H_
-

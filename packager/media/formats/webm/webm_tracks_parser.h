@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef MEDIA_FORMATS_WEBM_WEBM_TRACKS_PARSER_H_
-#define MEDIA_FORMATS_WEBM_WEBM_TRACKS_PARSER_H_
+#ifndef PACKAGER_MEDIA_FORMATS_WEBM_WEBM_TRACKS_PARSER_H_
+#define PACKAGER_MEDIA_FORMATS_WEBM_WEBM_TRACKS_PARSER_H_
 
 #include <map>
 #include <memory>
@@ -51,7 +51,7 @@ class WebMTracksParser : public WebMParserClient {
     return audio_encryption_key_id_;
   }
 
-  scoped_refptr<AudioStreamInfo> audio_stream_info() {
+  std::shared_ptr<AudioStreamInfo> audio_stream_info() {
     return audio_stream_info_;
   }
 
@@ -59,7 +59,7 @@ class WebMTracksParser : public WebMParserClient {
     return video_encryption_key_id_;
   }
 
-  scoped_refptr<VideoStreamInfo> video_stream_info() {
+  std::shared_ptr<VideoStreamInfo> video_stream_info() {
     return video_stream_info_;
   }
 
@@ -68,6 +68,8 @@ class WebMTracksParser : public WebMParserClient {
   const TextTracks& text_tracks() const {
     return text_tracks_;
   }
+
+  const VPCodecConfigurationRecord& vp_config() const { return vp_config_; }
 
  private:
   // WebMParserClient implementation.
@@ -100,10 +102,11 @@ class WebMTracksParser : public WebMParserClient {
   std::string video_encryption_key_id_;
 
   WebMAudioClient audio_client_;
-  scoped_refptr<AudioStreamInfo> audio_stream_info_;
+  std::shared_ptr<AudioStreamInfo> audio_stream_info_;
 
   WebMVideoClient video_client_;
-  scoped_refptr<VideoStreamInfo> video_stream_info_;
+  VPCodecConfigurationRecord vp_config_;
+  std::shared_ptr<VideoStreamInfo> video_stream_info_;
 
   DISALLOW_COPY_AND_ASSIGN(WebMTracksParser);
 };
@@ -111,4 +114,4 @@ class WebMTracksParser : public WebMParserClient {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_FORMATS_WEBM_WEBM_TRACKS_PARSER_H_
+#endif  // PACKAGER_MEDIA_FORMATS_WEBM_WEBM_TRACKS_PARSER_H_

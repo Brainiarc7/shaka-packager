@@ -4,14 +4,15 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_CODECS_NALU_READER_H_
-#define MEDIA_CODECS_NALU_READER_H_
+#ifndef PACKAGER_MEDIA_CODECS_NALU_READER_H_
+#define PACKAGER_MEDIA_CODECS_NALU_READER_H_
 
 #include <stdint.h>
 #include <stdlib.h>
 
 #include "packager/base/compiler_specific.h"
 #include "packager/base/macros.h"
+#include "packager/media/base/decrypt_config.h"
 
 namespace shaka {
 namespace media {
@@ -110,6 +111,9 @@ class Nalu {
   /// H264NaluType and H265NaluType enums may be used to compare against the
   /// return value.
   int type() const { return type_; }
+  bool is_aud() const { return is_aud_; }
+  bool is_vcl() const { return is_vcl_; }
+  /// Slice data partition NALs are not considered as slice NALs.
   bool is_video_slice() const { return is_video_slice_; }
   bool can_start_access_unit() const { return can_start_access_unit_; }
 
@@ -119,19 +123,21 @@ class Nalu {
 
   // A pointer to the NALU (i.e. points to the header).  This pointer is not
   // owned by this instance.
-  const uint8_t* data_;
+  const uint8_t* data_ = nullptr;
   // NALU header size (e.g. 1 byte for H.264).  Note that it does not include
   // header extension data in some NAL units.
-  uint64_t header_size_;
+  uint64_t header_size_ = 0;
   // Size of data after the header.
-  uint64_t payload_size_;
+  uint64_t payload_size_ = 0;
 
-  int ref_idc_;
-  int nuh_layer_id_;
-  int nuh_temporal_id_;
-  int type_;
-  bool is_video_slice_;
-  bool can_start_access_unit_;
+  int ref_idc_ = 0;
+  int nuh_layer_id_ = 0;
+  int nuh_temporal_id_ = 0;
+  int type_ = 0;
+  bool is_aud_ = false;
+  bool is_vcl_ = false;
+  bool is_video_slice_ = false;
+  bool can_start_access_unit_ = false;
 
   // Don't use DISALLOW_COPY_AND_ASSIGN since it is just numbers and a pointer
   // it does not own.  This allows Nalus to be stored in a vector.
@@ -155,6 +161,22 @@ class NaluReader {
              uint8_t nal_length_size,
              const uint8_t* stream,
              uint64_t stream_size);
+
+  /// @param type is the codec type of the NALU unit.
+  /// @param nalu_length_size should be set to 0 for AnnexB byte streams;
+  ///        otherwise, it indicates the size of NAL unit length for the NAL
+  ///        unit stream.
+  /// @param stream is the input stream.
+  /// @param stream_size is the size of @a stream.
+  /// @param subsamples specifies the clear and encrypted sections of the
+  ///        @a stream starting from the beginning of the @a stream. If
+  ///        @a subsamples doesn't cover the entire stream, then the rest is
+  ///        assumed to be in the clear.
+  NaluReader(Nalu::CodecType type,
+             uint8_t nal_length_size,
+             const uint8_t* stream,
+             uint64_t stream_size,
+             const std::vector<SubsampleEntry>& subsamples);
   ~NaluReader();
 
   // Find offset from start of data to next NALU start code
@@ -170,6 +192,21 @@ class NaluReader {
                             uint64_t data_size,
                             uint64_t* offset,
                             uint8_t* start_code_size);
+
+  /// Same as FindStartCode() but also specify the subsamples. This searches for
+  /// start codes in the clear section and will not scan for start codes in the
+  /// encrypted section. Even if there is a real NALU start code in the
+  /// encrypted section, this will skip them.
+  /// @param subsamples starting from the start of @a data. If @a subsamples
+  ///        does not cover the whole @a data, the rest is assumed to be in the
+  ///        clear.
+  /// @return true if it finds a NALU. false otherwise.
+  static bool FindStartCodeInClearRange(
+      const uint8_t* data,
+      uint64_t data_size,
+      uint64_t* offset,
+      uint8_t* start_code_size,
+      const std::vector<SubsampleEntry>& subsamples);
 
   /// Reads a NALU from the stream into |*nalu|, if one exists, and then
   /// advances to the next NALU.
@@ -208,10 +245,13 @@ class NaluReader {
   // The format of the stream.
   Format format_;
 
+  // subsamples left in stream_.
+  std::vector<SubsampleEntry> subsamples_;
+
   DISALLOW_COPY_AND_ASSIGN(NaluReader);
 };
 
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_CODECS_NALU_READER_H_
+#endif  // PACKAGER_MEDIA_CODECS_NALU_READER_H_

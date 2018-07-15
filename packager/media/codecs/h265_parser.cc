@@ -10,7 +10,6 @@
 #include <algorithm>
 
 #include "packager/base/logging.h"
-#include "packager/base/stl_util.h"
 #include "packager/media/base/macros.h"
 #include "packager/media/codecs/nalu_reader.h"
 
@@ -179,10 +178,7 @@ H265SliceHeader::H265SliceHeader() {}
 H265SliceHeader::~H265SliceHeader() {}
 
 H265Parser::H265Parser() {}
-H265Parser::~H265Parser() {
-  STLDeleteValues(&active_spses_);
-  STLDeleteValues(&active_ppses_);
-}
+H265Parser::~H265Parser() {}
 
 H265Parser::Result H265Parser::ParseSliceHeader(const Nalu& nalu,
                                                 H265SliceHeader* slice_header) {
@@ -240,6 +236,8 @@ H265Parser::Result H265Parser::ParseSliceHeader(const Nalu& nalu,
         TRUE_OR_RETURN(
             br->ReadBits(ceil(log2(sps->num_short_term_ref_pic_sets)),
                          &slice_header->short_term_ref_pic_set_idx));
+        TRUE_OR_RETURN(slice_header->short_term_ref_pic_set_idx <
+                       sps->num_short_term_ref_pic_sets);
       }
 
       if (sps->long_term_ref_pic_present_flag) {
@@ -394,10 +392,9 @@ H265Parser::Result H265Parser::ParseSliceHeader(const Nalu& nalu,
     TRUE_OR_RETURN(br->SkipBits(extension_length * 8));
   }
 
-  size_t epb = br->NumEmulationPreventionBytesRead();
-  slice_header->header_bit_size =
-      (nalu.payload_size() - epb) * 8 - br->NumBitsLeft();
+  OK_OR_RETURN(ByteAlignment(br));
 
+  slice_header->header_bit_size = nalu.payload_size() * 8 - br->NumBitsLeft();
   return kOk;
 }
 
@@ -504,8 +501,7 @@ H265Parser::Result H265Parser::ParsePps(const Nalu& nalu, int* pps_id) {
 
   // This will replace any existing PPS instance.
   *pps_id = pps->pic_parameter_set_id;
-  delete active_ppses_[*pps_id];
-  active_ppses_[*pps_id] = pps.release();
+  active_ppses_[*pps_id] = std::move(pps);
 
   return kOk;
 }
@@ -526,7 +522,8 @@ H265Parser::Result H265Parser::ParseSps(const Nalu& nalu, int* sps_id) {
   TRUE_OR_RETURN(br->ReadBits(3, &sps->max_sub_layers_minus1));
   TRUE_OR_RETURN(br->ReadBool(&sps->temporal_id_nesting_flag));
 
-  OK_OR_RETURN(SkipProfileTierLevel(true, sps->max_sub_layers_minus1, br));
+  OK_OR_RETURN(
+      ReadProfileTierLevel(true, sps->max_sub_layers_minus1, br, sps.get()));
 
   TRUE_OR_RETURN(br->ReadUE(&sps->seq_parameter_set_id));
   TRUE_OR_RETURN(br->ReadUE(&sps->chroma_format_idc));
@@ -621,18 +618,17 @@ H265Parser::Result H265Parser::ParseSps(const Nalu& nalu, int* sps_id) {
 
   // This will replace any existing SPS instance.
   *sps_id = sps->seq_parameter_set_id;
-  delete active_spses_[*sps_id];
-  active_spses_[*sps_id] = sps.release();
+  active_spses_[*sps_id] = std::move(sps);
 
   return kOk;
 }
 
 const H265Pps* H265Parser::GetPps(int pps_id) {
-  return active_ppses_[pps_id];
+  return active_ppses_[pps_id].get();
 }
 
 const H265Sps* H265Parser::GetSps(int sps_id) {
-  return active_spses_[sps_id];
+  return active_spses_[sps_id].get();
 }
 
 H265Parser::Result H265Parser::ParseVuiParameters(int max_num_sub_layers_minus1,
@@ -840,7 +836,9 @@ H265Parser::Result H265Parser::ParseReferencePictureSet(
     }
   } else {
     TRUE_OR_RETURN(br->ReadUE(&out_ref_pic_set->num_negative_pics));
+    TRUE_OR_RETURN(out_ref_pic_set->num_negative_pics <= kMaxRefPicSetCount);
     TRUE_OR_RETURN(br->ReadUE(&out_ref_pic_set->num_positive_pics));
+    TRUE_OR_RETURN(out_ref_pic_set->num_positive_pics <= kMaxRefPicSetCount);
 
     int prev_poc = 0;
     for (int i = 0; i < out_ref_pic_set->num_negative_pics; i++) {
@@ -956,24 +954,27 @@ H265Parser::Result H265Parser::SkipPredictionWeightTable(
   return kOk;
 }
 
-H265Parser::Result H265Parser::SkipProfileTierLevel(
+H265Parser::Result H265Parser::ReadProfileTierLevel(
     bool profile_present,
     int max_num_sub_layers_minus1,
-    H26xBitReader* br) {
+    H26xBitReader* br,
+    H265Sps* sps) {
   // Reads whole element, ignores it.
 
   if (profile_present) {
-    // general_profile_space, general_tier_flag, general_profile_idc
-    // general_profile_compativility_flag
-    // general_progressive_source_flag
-    // general_interlaced_source_flag
-    // general_non_packed_constraint_flag
-    // general_frame_only_constraint_flag
-    // 44-bits of other flags
-    TRUE_OR_RETURN(br->SkipBits(2 + 1 + 5 + 32 + 4 + 44));
+    // 11 bytes of general_profile_tier flags:
+    //   general_profile_space, general_tier_flag, general_profile_idc
+    //   general_profile_compativility_flag
+    //   general_progressive_source_flag
+    //   general_interlaced_source_flag
+    //   general_non_packed_constraint_flag
+    //   general_frame_only_constraint_flag
+    //   44-bits of other flags
+    for (int i = 0; i < 11; i++)
+      TRUE_OR_RETURN(br->ReadBits(8, &sps->general_profile_tier_level_data[i]));
   }
-
-  TRUE_OR_RETURN(br->SkipBits(8));  // general_level_idc
+  // general_level_idc
+  TRUE_OR_RETURN(br->ReadBits(8, &sps->general_profile_tier_level_data[11]));
 
   std::vector<bool> sub_layer_profile_present(max_num_sub_layers_minus1);
   std::vector<bool> sub_layer_level_present(max_num_sub_layers_minus1);
@@ -1109,6 +1110,12 @@ H265Parser::Result H265Parser::SkipSubLayerHrdParameters(
     TRUE_OR_RETURN(br->SkipBits(1));  // cbr_flag
   }
 
+  return kOk;
+}
+
+H265Parser::Result H265Parser::ByteAlignment(H26xBitReader* br) {
+  TRUE_OR_RETURN(br->SkipBits(1));
+  TRUE_OR_RETURN(br->SkipBits(br->NumBitsLeft() % 8));
   return kOk;
 }
 

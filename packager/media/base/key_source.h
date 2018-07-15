@@ -4,17 +4,35 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_BASE_KEY_SOURCE_H_
-#define MEDIA_BASE_KEY_SOURCE_H_
+#ifndef PACKAGER_MEDIA_BASE_KEY_SOURCE_H_
+#define PACKAGER_MEDIA_BASE_KEY_SOURCE_H_
 
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "packager/media/base/protection_system_specific_info.h"
-#include "packager/media/base/status.h"
+#include "packager/media/base/pssh_generator.h"
+#include "packager/status.h"
 
 namespace shaka {
 namespace media {
+
+/// Encrypted media init data types. It is extended from:
+/// https://www.w3.org/TR/eme-initdata-registry/#registry.
+enum class EmeInitDataType {
+  UNKNOWN,
+  /// One or multiple PSSH boxes.
+  CENC,
+  /// WebM init data is basically KeyId.
+  WEBM,
+  /// JSON formatted key ids.
+  KEYIDS,
+  /// Widevine classic asset id.
+  WIDEVINE_CLASSIC,
+  MAX = WIDEVINE_CLASSIC
+};
 
 struct EncryptionKey {
   EncryptionKey();
@@ -26,44 +44,29 @@ struct EncryptionKey {
   std::vector<uint8_t> iv;
 };
 
+typedef std::map<std::string, std::unique_ptr<EncryptionKey>> EncryptionKeyMap;
+
 /// KeySource is responsible for encryption key acquisition.
 class KeySource {
  public:
-  enum TrackType {
-    TRACK_TYPE_UNKNOWN = 0,
-    TRACK_TYPE_SD = 1,
-    TRACK_TYPE_HD = 2,
-    TRACK_TYPE_AUDIO = 3,
-    TRACK_TYPE_UNSPECIFIED = 4,
-    NUM_VALID_TRACK_TYPES = 4
-  };
+  explicit KeySource(int protection_systems_flags);
 
-  KeySource();
   virtual ~KeySource();
 
-  /// Fetch keys for CENC from the key server.
-  /// @param pssh_box The entire PSSH box for the content to be decrypted
+  /// Fetch keys based on the specified encrypted media init data.
+  /// @param init_data_type specifies the encrypted media init data type.
+  /// @param init_data contains the init data.
   /// @return OK on success, an error status otherwise.
-  virtual Status FetchKeys(const std::vector<uint8_t>& pssh_box) = 0;
+  virtual Status FetchKeys(EmeInitDataType init_data_type,
+                           const std::vector<uint8_t>& init_data) = 0;
 
-  /// Fetch keys for CENC from the key server.
-  /// @param key_ids the key IDs for the keys to fetch from the server.
-  /// @return OK on success, an error status otherwise.
-  virtual Status FetchKeys(
-      const std::vector<std::vector<uint8_t>>& key_ids) = 0;
-
-  /// Fetch keys for WVM decryption from the key server.
-  /// @param asset_id is the Widevine Classic asset ID for the content to be
-  /// decrypted.
-  /// @return OK on success, an error status otherwise.
-  virtual Status FetchKeys(uint32_t asset_id) = 0;
-
-  /// Get encryption key of the specified track type.
-  /// @param track_type is the type of track for which retrieving the key.
+  /// Get encryption key of the specified stream label.
+  /// @param stream_label is the label of stream for which retrieving the key.
   /// @param key is a pointer to the EncryptionKey which will hold the retrieved
   ///        key. Owner retains ownership, and may not be NULL.
   /// @return OK on success, an error status otherwise.
-  virtual Status GetKey(TrackType track_type, EncryptionKey* key) = 0;
+  virtual Status GetKey(const std::string& stream_label,
+                        EncryptionKey* key) = 0;
 
   /// Get the encryption key specified by the CENC key ID.
   /// @param key_id is the unique identifier for the key being retreived.
@@ -76,25 +79,26 @@ class KeySource {
   /// Get encryption key of the specified track type at the specified index.
   /// @param crypto_period_index is the sequence number of the key rotation
   ///        period for which the key is being retrieved.
-  /// @param track_type is the type of track for which retrieving the key.
+  /// @param stream_label is the label of stream for which retrieving the key.
   /// @param key is a pointer to the EncryptionKey which will hold the retrieved
   ///        key. Owner retains ownership, and may not be NULL.
   /// @return OK on success, an error status otherwise.
   virtual Status GetCryptoPeriodKey(uint32_t crypto_period_index,
-                                    TrackType track_type,
+                                    const std::string& stream_label,
                                     EncryptionKey* key) = 0;
 
-  /// Convert string representation of track type to enum representation.
-  static TrackType GetTrackTypeFromString(const std::string& track_type_string);
-
-  /// Convert TrackType to string.
-  static std::string TrackTypeToString(TrackType track_type);
+ protected:
+  /// Update the protection sysmtem specific info for the encryption keys.
+  /// @param encryption_key_map is a map of encryption keys for all tracks.
+  Status UpdateProtectionSystemInfo(EncryptionKeyMap* encryption_key_map);
 
  private:
+  std::vector<std::unique_ptr<PsshGenerator>> pssh_generators_;
+
   DISALLOW_COPY_AND_ASSIGN(KeySource);
 };
 
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_BASE_KEY_SOURCE_H_
+#endif  // PACKAGER_MEDIA_BASE_KEY_SOURCE_H_

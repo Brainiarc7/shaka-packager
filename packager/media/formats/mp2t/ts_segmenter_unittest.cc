@@ -8,11 +8,12 @@
 #include <gtest/gtest.h>
 
 #include "packager/media/base/audio_stream_info.h"
-#include "packager/media/base/fixed_key_source.h"
-#include "packager/media/base/test/status_test_util.h"
 #include "packager/media/base/video_stream_info.h"
 #include "packager/media/event/mock_muxer_listener.h"
+#include "packager/media/formats/mp2t/pes_packet.h"
+#include "packager/media/formats/mp2t/program_map_table_writer.h"
 #include "packager/media/formats/mp2t/ts_segmenter.h"
+#include "packager/status_test_util.h"
 
 namespace shaka {
 namespace media {
@@ -42,7 +43,7 @@ const uint32_t kWidth = 1280;
 const uint32_t kHeight = 720;
 const uint32_t kPixelWidth = 1;
 const uint32_t kPixelHeight = 1;
-const uint16_t kTrickPlayRate = 1;
+const uint16_t kTrickPlayFactor = 1;
 const uint8_t kNaluLengthSize = 1;
 const bool kIsEncrypted = false;
 
@@ -53,12 +54,7 @@ const uint8_t kAnyData[] = {
 class MockPesPacketGenerator : public PesPacketGenerator {
  public:
   MOCK_METHOD1(Initialize, bool(const StreamInfo& info));
-  MOCK_METHOD1(PushSample, bool(scoped_refptr<MediaSample> sample));
-  MOCK_METHOD1(SetEncryptionKeyMock, bool(EncryptionKey* encryption_key));
-  bool SetEncryptionKey(
-      std::unique_ptr<EncryptionKey> encryption_key) override {
-    return SetEncryptionKeyMock(encryption_key.get());
-  }
+  MOCK_METHOD1(PushSample, bool(const MediaSample& sample));
 
   MOCK_METHOD0(NumberOfReadyPesPackets, size_t());
 
@@ -75,7 +71,11 @@ class MockPesPacketGenerator : public PesPacketGenerator {
 
 class MockTsWriter : public TsWriter {
  public:
-  MOCK_METHOD1(Initialize, bool(const StreamInfo& stream_info));
+  MockTsWriter()
+      : TsWriter(std::unique_ptr<ProgramMapTableWriter>(
+            // Create a bogus pmt writer, which we don't really care.
+            new VideoProgramMapTableWriter(kUnknownCodec))) {}
+
   MOCK_METHOD1(NewSegment, bool(const std::string& file_name));
   MOCK_METHOD0(SignalEncrypted, void());
   MOCK_METHOD0(FinalizeSegment, bool());
@@ -86,12 +86,6 @@ class MockTsWriter : public TsWriter {
     // No need to keep the pes packet around for the current tests.
     return AddPesPacketMock(pes_packet.get());
   }
-};
-
-// TODO(rkuroiwa): Add mock_key_source.{h,cc} in media/base.
-class MockKeySource : public FixedKeySource {
- public:
-  MOCK_METHOD2(GetKey, Status(TrackType track_type, EncryptionKey* key));
 };
 
 }  // namespace
@@ -108,40 +102,38 @@ class TsSegmenterTest : public ::testing::Test {
 };
 
 TEST_F(TsSegmenterTest, Initialize) {
-  scoped_refptr<VideoStreamInfo> stream_info(new VideoStreamInfo(
-      kTrackId, kTimeScale, kDuration, kH264Codec, kCodecString, kExtraData,
+  std::shared_ptr<VideoStreamInfo> stream_info(new VideoStreamInfo(
+      kTrackId, kTimeScale, kDuration, kH264Codec,
+      H26xStreamFormat::kAnnexbByteStream, kCodecString, kExtraData,
       arraysize(kExtraData), kWidth, kHeight, kPixelWidth, kPixelHeight,
-      kTrickPlayRate, kNaluLengthSize, kLanguage, kIsEncrypted));
+      kTrickPlayFactor, kNaluLengthSize, kLanguage, kIsEncrypted));
   MuxerOptions options;
   options.segment_template = "file$Number$.ts";
   TsSegmenter segmenter(options, nullptr);
 
-  EXPECT_CALL(*mock_ts_writer_, Initialize(_)).WillOnce(Return(true));
   EXPECT_CALL(*mock_pes_packet_generator_, Initialize(_))
       .WillOnce(Return(true));
 
-  segmenter.InjectTsWriterForTesting(std::move(mock_ts_writer_));
   segmenter.InjectPesPacketGeneratorForTesting(
       std::move(mock_pes_packet_generator_));
 
-  EXPECT_OK(segmenter.Initialize(*stream_info, nullptr, 0, 0));
+  EXPECT_OK(segmenter.Initialize(*stream_info));
 }
 
 TEST_F(TsSegmenterTest, AddSample) {
-  scoped_refptr<VideoStreamInfo> stream_info(new VideoStreamInfo(
-      kTrackId, kTimeScale, kDuration, kH264Codec, kCodecString, kExtraData,
+  std::shared_ptr<VideoStreamInfo> stream_info(new VideoStreamInfo(
+      kTrackId, kTimeScale, kDuration, kH264Codec,
+      H26xStreamFormat::kAnnexbByteStream, kCodecString, kExtraData,
       arraysize(kExtraData), kWidth, kHeight, kPixelWidth, kPixelHeight,
-      kTrickPlayRate, kNaluLengthSize, kLanguage, kIsEncrypted));
+      kTrickPlayFactor, kNaluLengthSize, kLanguage, kIsEncrypted));
   MuxerOptions options;
-  options.segment_duration = 10.0;
   options.segment_template = "file$Number$.ts";
   TsSegmenter segmenter(options, nullptr);
 
-  EXPECT_CALL(*mock_ts_writer_, Initialize(_)).WillOnce(Return(true));
   EXPECT_CALL(*mock_pes_packet_generator_, Initialize(_))
       .WillOnce(Return(true));
 
-  scoped_refptr<MediaSample> sample =
+  std::shared_ptr<MediaSample> sample =
       MediaSample::CopyFrom(kAnyData, arraysize(kAnyData), kIsKeyFrame);
 
   Sequence writer_sequence;
@@ -167,28 +159,25 @@ TEST_F(TsSegmenterTest, AddSample) {
   EXPECT_CALL(*mock_pes_packet_generator_, GetNextPesPacketMock())
       .WillOnce(Return(new PesPacket()));
 
-  segmenter.InjectTsWriterForTesting(std::move(mock_ts_writer_));
   segmenter.InjectPesPacketGeneratorForTesting(
       std::move(mock_pes_packet_generator_));
 
-  EXPECT_OK(segmenter.Initialize(*stream_info, nullptr, 0, 0));
-  EXPECT_OK(segmenter.AddSample(sample));
+  EXPECT_OK(segmenter.Initialize(*stream_info));
+  segmenter.InjectTsWriterForTesting(std::move(mock_ts_writer_));
+  EXPECT_OK(segmenter.AddSample(*sample));
 }
 
-// Verify the case where the segment is long enough and the current segment
-// should be closed.
-// This will add 2 samples and verify that the first segment is closed when the
-// second sample is added.
+// This will add one sample then finalize segment then add another sample.
 TEST_F(TsSegmenterTest, PassedSegmentDuration) {
   // Use something significantly smaller than 90000 to check that the scaling is
   // done correctly in the segmenter.
   const uint32_t kInputTimescale = 1001;
-  scoped_refptr<VideoStreamInfo> stream_info(new VideoStreamInfo(
-      kTrackId, kInputTimescale, kDuration, kH264Codec, kCodecString,
-      kExtraData, arraysize(kExtraData), kWidth, kHeight, kPixelWidth,
-      kPixelHeight, kTrickPlayRate, kNaluLengthSize, kLanguage, kIsEncrypted));
+  std::shared_ptr<VideoStreamInfo> stream_info(new VideoStreamInfo(
+      kTrackId, kInputTimescale, kDuration, kH264Codec,
+      H26xStreamFormat::kAnnexbByteStream, kCodecString, kExtraData,
+      arraysize(kExtraData), kWidth, kHeight, kPixelWidth, kPixelHeight,
+      kTrickPlayFactor, kNaluLengthSize, kLanguage, kIsEncrypted));
   MuxerOptions options;
-  options.segment_duration = 10.0;
   options.segment_template = "file$Number$.ts";
 
   MockMuxerListener mock_listener;
@@ -196,27 +185,23 @@ TEST_F(TsSegmenterTest, PassedSegmentDuration) {
 
   const uint32_t kFirstPts = 1000;
 
-  EXPECT_CALL(*mock_ts_writer_, Initialize(_)).WillOnce(Return(true));
   EXPECT_CALL(*mock_pes_packet_generator_, Initialize(_))
       .WillOnce(Return(true));
 
-  scoped_refptr<MediaSample> sample1 =
+  std::shared_ptr<MediaSample> sample1 =
       MediaSample::CopyFrom(kAnyData, arraysize(kAnyData), kIsKeyFrame);
-  scoped_refptr<MediaSample> sample2 =
-      MediaSample::CopyFrom(kAnyData, arraysize(kAnyData), kIsKeyFrame);
-
-  // 11 seconds > 10 seconds (segment duration).
-  // Expect the segment to be finalized.
   sample1->set_duration(kInputTimescale * 11);
+  std::shared_ptr<MediaSample> sample2 =
+      MediaSample::CopyFrom(kAnyData, arraysize(kAnyData), kIsKeyFrame);
+  // Doesn't really matter how long this is.
+  sample2->set_duration(kInputTimescale * 7);
 
   // (Finalize is not called at the end of this test so) Expect one segment
   // event. The length should be the same as the above sample that exceeds the
   // duration.
   EXPECT_CALL(mock_listener,
-              OnNewSegment("file1.ts", kFirstPts, kTimeScale * 11, _));
-
-  // Doesn't really matter how long this is.
-  sample2->set_duration(kInputTimescale * 7);
+              OnNewSegment("file1.ts", kFirstPts * kTimeScale / kInputTimescale,
+                           kTimeScale * 11, _));
 
   Sequence writer_sequence;
   EXPECT_CALL(*mock_ts_writer_, NewSegment(StrEq("file1.ts")))
@@ -263,46 +248,43 @@ TEST_F(TsSegmenterTest, PassedSegmentDuration) {
 
   // The pointers are released inside the segmenter.
   Sequence pes_packet_sequence;
-  PesPacket* first_pes = new PesPacket();
-  first_pes->set_pts(kFirstPts);
   EXPECT_CALL(*mock_pes_packet_generator_, GetNextPesPacketMock())
       .InSequence(pes_packet_sequence)
-      .WillOnce(Return(first_pes));
+      .WillOnce(Return(new PesPacket));
   EXPECT_CALL(*mock_pes_packet_generator_, GetNextPesPacketMock())
       .InSequence(pes_packet_sequence)
       .WillOnce(Return(new PesPacket()));
 
-  segmenter.InjectTsWriterForTesting(std::move(mock_ts_writer_));
   segmenter.InjectPesPacketGeneratorForTesting(
       std::move(mock_pes_packet_generator_));
-  EXPECT_OK(segmenter.Initialize(*stream_info, nullptr, 0, 0));
-  EXPECT_OK(segmenter.AddSample(sample1));
-  EXPECT_OK(segmenter.AddSample(sample2));
+  EXPECT_OK(segmenter.Initialize(*stream_info));
+  segmenter.InjectTsWriterForTesting(std::move(mock_ts_writer_));
+  EXPECT_OK(segmenter.AddSample(*sample1));
+  EXPECT_OK(segmenter.FinalizeSegment(kFirstPts, sample1->duration()));
+  EXPECT_OK(segmenter.AddSample(*sample2));
 }
 
 // Finalize right after Initialize(). The writer will not be initialized.
 TEST_F(TsSegmenterTest, InitializeThenFinalize) {
-  scoped_refptr<VideoStreamInfo> stream_info(new VideoStreamInfo(
-      kTrackId, kTimeScale, kDuration, kH264Codec, kCodecString, kExtraData,
+  std::shared_ptr<VideoStreamInfo> stream_info(new VideoStreamInfo(
+      kTrackId, kTimeScale, kDuration, kH264Codec,
+      H26xStreamFormat::kAnnexbByteStream, kCodecString, kExtraData,
       arraysize(kExtraData), kWidth, kHeight, kPixelWidth, kPixelHeight,
-      kTrickPlayRate, kNaluLengthSize, kLanguage, kIsEncrypted));
+      kTrickPlayFactor, kNaluLengthSize, kLanguage, kIsEncrypted));
   MuxerOptions options;
-  options.segment_duration = 10.0;
   options.segment_template = "file$Number$.ts";
   TsSegmenter segmenter(options, nullptr);
 
-  EXPECT_CALL(*mock_ts_writer_, Initialize(_)).WillOnce(Return(true));
   EXPECT_CALL(*mock_pes_packet_generator_, Initialize(_))
       .WillOnce(Return(true));
 
-  EXPECT_CALL(*mock_pes_packet_generator_, Flush()).WillOnce(Return(true));
+  EXPECT_CALL(*mock_pes_packet_generator_, Flush()).Times(0);
   ON_CALL(*mock_pes_packet_generator_, NumberOfReadyPesPackets())
       .WillByDefault(Return(0));
 
-  segmenter.InjectTsWriterForTesting(std::move(mock_ts_writer_));
   segmenter.InjectPesPacketGeneratorForTesting(
       std::move(mock_pes_packet_generator_));
-  EXPECT_OK(segmenter.Initialize(*stream_info, nullptr, 0, 0));
+  EXPECT_OK(segmenter.Initialize(*stream_info));
   EXPECT_OK(segmenter.Finalize());
 }
 
@@ -310,17 +292,16 @@ TEST_F(TsSegmenterTest, InitializeThenFinalize) {
 // been initialized.
 // The test does not really add any samples but instead simulates an initialized
 // writer with a mock.
-TEST_F(TsSegmenterTest, Finalize) {
-  scoped_refptr<VideoStreamInfo> stream_info(new VideoStreamInfo(
-      kTrackId, kTimeScale, kDuration, kH264Codec, kCodecString, kExtraData,
+TEST_F(TsSegmenterTest, FinalizeSegment) {
+  std::shared_ptr<VideoStreamInfo> stream_info(new VideoStreamInfo(
+      kTrackId, kTimeScale, kDuration, kH264Codec,
+      H26xStreamFormat::kAnnexbByteStream, kCodecString, kExtraData,
       arraysize(kExtraData), kWidth, kHeight, kPixelWidth, kPixelHeight,
-      kTrickPlayRate, kNaluLengthSize, kLanguage, kIsEncrypted));
+      kTrickPlayFactor, kNaluLengthSize, kLanguage, kIsEncrypted));
   MuxerOptions options;
-  options.segment_duration = 10.0;
   options.segment_template = "file$Number$.ts";
   TsSegmenter segmenter(options, nullptr);
 
-  EXPECT_CALL(*mock_ts_writer_, Initialize(_)).WillOnce(Return(true));
   EXPECT_CALL(*mock_pes_packet_generator_, Initialize(_))
       .WillOnce(Return(true));
 
@@ -330,213 +311,27 @@ TEST_F(TsSegmenterTest, Finalize) {
       .WillOnce(Return(0u));
   EXPECT_CALL(*mock_ts_writer_, FinalizeSegment()).WillOnce(Return(true));
 
-  segmenter.InjectTsWriterForTesting(std::move(mock_ts_writer_));
   segmenter.InjectPesPacketGeneratorForTesting(
       std::move(mock_pes_packet_generator_));
-  EXPECT_OK(segmenter.Initialize(*stream_info, nullptr, 0, 0));
+  EXPECT_OK(segmenter.Initialize(*stream_info));
+  segmenter.InjectTsWriterForTesting(std::move(mock_ts_writer_));
   segmenter.SetTsWriterFileOpenedForTesting(true);
-  EXPECT_OK(segmenter.Finalize());
+  EXPECT_OK(segmenter.FinalizeSegment(0, 100 /* arbitrary duration */));
 }
 
-// Verify that it won't finish a segment if the sample is not a key frame.
-TEST_F(TsSegmenterTest, SegmentOnlyBeforeKeyFrame) {
-  scoped_refptr<VideoStreamInfo> stream_info(new VideoStreamInfo(
-      kTrackId, kTimeScale, kDuration, kH264Codec, kCodecString, kExtraData,
+TEST_F(TsSegmenterTest, EncryptedSample) {
+  std::shared_ptr<VideoStreamInfo> stream_info(new VideoStreamInfo(
+      kTrackId, kTimeScale, kDuration, kH264Codec,
+      H26xStreamFormat::kAnnexbByteStream, kCodecString, kExtraData,
       arraysize(kExtraData), kWidth, kHeight, kPixelWidth, kPixelHeight,
-      kTrickPlayRate, kNaluLengthSize, kLanguage, kIsEncrypted));
-  MuxerOptions options;
-  options.segment_duration = 10.0;
-  options.segment_template = "file$Number$.ts";
-  TsSegmenter segmenter(options, nullptr);
-
-  EXPECT_CALL(*mock_ts_writer_, Initialize(_)).WillOnce(Return(true));
-  EXPECT_CALL(*mock_pes_packet_generator_, Initialize(_))
-      .WillOnce(Return(true));
-
-  const uint8_t kAnyData[] = {
-      0x01, 0x0F, 0x3C,
-  };
-  scoped_refptr<MediaSample> key_frame_sample1 =
-      MediaSample::CopyFrom(kAnyData, arraysize(kAnyData), kIsKeyFrame);
-  scoped_refptr<MediaSample> non_key_frame_sample =
-      MediaSample::CopyFrom(kAnyData, arraysize(kAnyData), !kIsKeyFrame);
-  scoped_refptr<MediaSample> key_frame_sample2 =
-      MediaSample::CopyFrom(kAnyData, arraysize(kAnyData), kIsKeyFrame);
-
-  // 11 seconds > 10 seconds (segment duration).
-  key_frame_sample1->set_duration(kTimeScale * 11);
-
-  // But since the second sample is not a key frame, it shouldn't be segmented.
-  non_key_frame_sample->set_duration(kTimeScale * 7);
-
-  // Since this is a key frame, it should be segmented when this is added.
-  key_frame_sample2->set_duration(kTimeScale * 3);
-
-  EXPECT_CALL(*mock_pes_packet_generator_, PushSample(_))
-      .Times(3)
-      .WillRepeatedly(Return(true));
-
-  Sequence writer_sequence;
-  EXPECT_CALL(*mock_ts_writer_, NewSegment(StrEq("file1.ts")))
-      .InSequence(writer_sequence)
-      .WillOnce(Return(true));
-
-  Sequence ready_pes_sequence;
-  // First AddSample().
-  EXPECT_CALL(*mock_pes_packet_generator_, NumberOfReadyPesPackets())
-      .InSequence(ready_pes_sequence)
-      .WillOnce(Return(1u));
-  EXPECT_CALL(*mock_pes_packet_generator_, NumberOfReadyPesPackets())
-      .InSequence(ready_pes_sequence)
-      .WillOnce(Return(0u));
-  // Second AddSample().
-  EXPECT_CALL(*mock_pes_packet_generator_, NumberOfReadyPesPackets())
-      .InSequence(ready_pes_sequence)
-      .WillOnce(Return(1u));
-  EXPECT_CALL(*mock_pes_packet_generator_, NumberOfReadyPesPackets())
-      .InSequence(ready_pes_sequence)
-      .WillOnce(Return(0u));
-  // Third AddSample(), in Flush().
-  EXPECT_CALL(*mock_pes_packet_generator_, NumberOfReadyPesPackets())
-      .InSequence(ready_pes_sequence)
-      .WillOnce(Return(0u));
-  // Third AddSample() after Flush().
-  EXPECT_CALL(*mock_pes_packet_generator_, NumberOfReadyPesPackets())
-      .InSequence(ready_pes_sequence)
-      .WillOnce(Return(1u));
-  EXPECT_CALL(*mock_pes_packet_generator_, NumberOfReadyPesPackets())
-      .InSequence(ready_pes_sequence)
-      .WillOnce(Return(0u));
-
-  EXPECT_CALL(*mock_pes_packet_generator_, Flush())
-      .WillOnce(Return(true));
-
-  EXPECT_CALL(*mock_ts_writer_, FinalizeSegment())
-      .InSequence(writer_sequence)
-      .WillOnce(Return(true));
-
-  // Expectations for second AddSample() for the second segment.
-  EXPECT_CALL(*mock_ts_writer_, NewSegment(StrEq("file2.ts")))
-      .InSequence(writer_sequence)
-      .WillOnce(Return(true));
-
-  EXPECT_CALL(*mock_ts_writer_, AddPesPacketMock(_))
-      .Times(3)
-      .WillRepeatedly(Return(true));
-
-  // The pointers are released inside the segmenter.
-  Sequence pes_packet_sequence;
-  EXPECT_CALL(*mock_pes_packet_generator_, GetNextPesPacketMock())
-      .InSequence(pes_packet_sequence)
-      .WillOnce(Return(new PesPacket()));
-  EXPECT_CALL(*mock_pes_packet_generator_, GetNextPesPacketMock())
-      .InSequence(pes_packet_sequence)
-      .WillOnce(Return(new PesPacket()));
-  EXPECT_CALL(*mock_pes_packet_generator_, GetNextPesPacketMock())
-      .InSequence(pes_packet_sequence)
-      .WillOnce(Return(new PesPacket()));
-
-  segmenter.InjectTsWriterForTesting(std::move(mock_ts_writer_));
-  segmenter.InjectPesPacketGeneratorForTesting(
-      std::move(mock_pes_packet_generator_));
-  EXPECT_OK(segmenter.Initialize(*stream_info, nullptr, 0, 0));
-  EXPECT_OK(segmenter.AddSample(key_frame_sample1));
-  EXPECT_OK(segmenter.AddSample(non_key_frame_sample));
-  EXPECT_OK(segmenter.AddSample(key_frame_sample2));
-}
-
-TEST_F(TsSegmenterTest, WithEncryptionNoClearLead) {
-  scoped_refptr<VideoStreamInfo> stream_info(new VideoStreamInfo(
-      kTrackId, kTimeScale, kDuration, kH264Codec, kCodecString, kExtraData,
-      arraysize(kExtraData), kWidth, kHeight, kPixelWidth, kPixelHeight,
-      kTrickPlayRate, kNaluLengthSize, kLanguage, kIsEncrypted));
-  MuxerOptions options;
-  options.segment_duration = 10.0;
-  options.segment_template = "file$Number$.ts";
-
-  MockMuxerListener mock_listener;
-  EXPECT_CALL(mock_listener, OnEncryptionInfoReady(_, _, _, _, _));
-  TsSegmenter segmenter(options, &mock_listener);
-
-  EXPECT_CALL(*mock_ts_writer_, Initialize(_)).WillOnce(Return(true));
-  EXPECT_CALL(*mock_ts_writer_, SignalEncrypted());
-  EXPECT_CALL(*mock_pes_packet_generator_, Initialize(_))
-      .WillOnce(Return(true));
-
-  EXPECT_CALL(*mock_pes_packet_generator_, SetEncryptionKeyMock(_))
-      .WillOnce(Return(true));
-
-  segmenter.InjectTsWriterForTesting(std::move(mock_ts_writer_));
-  segmenter.InjectPesPacketGeneratorForTesting(
-      std::move(mock_pes_packet_generator_));
-
-  MockKeySource mock_key_source;
-  EXPECT_CALL(mock_key_source, GetKey(KeySource::TRACK_TYPE_HD, _))
-      .WillOnce(Return(Status::OK));
-
-  const uint32_t k480pPixels = 640 * 480;
-  // Set this to 0 so that Finalize will call
-  // PesPacketGenerator::SetEncryptionKey().
-  // Even tho no samples have been added.
-  const double kClearLeadSeconds = 0;
-  EXPECT_OK(segmenter.Initialize(*stream_info, &mock_key_source, k480pPixels,
-                                 kClearLeadSeconds));
-}
-
-// Verify that the muxer listener pointer is not used without checking that it's
-// not null.
-TEST_F(TsSegmenterTest, WithEncryptionNoClearLeadNoMuxerListener) {
-  scoped_refptr<VideoStreamInfo> stream_info(new VideoStreamInfo(
-      kTrackId, kTimeScale, kDuration, kH264Codec, kCodecString, kExtraData,
-      arraysize(kExtraData), kWidth, kHeight, kPixelWidth, kPixelHeight,
-      kTrickPlayRate, kNaluLengthSize, kLanguage, kIsEncrypted));
-  MuxerOptions options;
-  options.segment_duration = 10.0;
-  options.segment_template = "file$Number$.ts";
-
-  TsSegmenter segmenter(options, nullptr);
-
-  EXPECT_CALL(*mock_ts_writer_, Initialize(_)).WillOnce(Return(true));
-  EXPECT_CALL(*mock_ts_writer_, SignalEncrypted());
-  EXPECT_CALL(*mock_pes_packet_generator_, Initialize(_))
-      .WillOnce(Return(true));
-
-  EXPECT_CALL(*mock_pes_packet_generator_, SetEncryptionKeyMock(_))
-      .WillOnce(Return(true));
-
-  segmenter.InjectTsWriterForTesting(std::move(mock_ts_writer_));
-  segmenter.InjectPesPacketGeneratorForTesting(
-      std::move(mock_pes_packet_generator_));
-
-  MockKeySource mock_key_source;
-  EXPECT_CALL(mock_key_source, GetKey(KeySource::TRACK_TYPE_HD, _))
-      .WillOnce(Return(Status::OK));
-
-  const uint32_t k480pPixels = 640 * 480;
-  // Set this to 0 so that Finalize will call
-  // PesPacketGenerator::SetEncryptionKey().
-  // Even tho no samples have been added.
-  const double kClearLeadSeconds = 0;
-  EXPECT_OK(segmenter.Initialize(*stream_info, &mock_key_source, k480pPixels,
-                                 kClearLeadSeconds));
-}
-
-// Verify that encryption notification is sent to objects after clear lead.
-TEST_F(TsSegmenterTest, WithEncryptionWithClearLead) {
-  scoped_refptr<VideoStreamInfo> stream_info(new VideoStreamInfo(
-      kTrackId, kTimeScale, kDuration, kH264Codec, kCodecString, kExtraData,
-      arraysize(kExtraData), kWidth, kHeight, kPixelWidth, kPixelHeight,
-      kTrickPlayRate, kNaluLengthSize, kLanguage, kIsEncrypted));
+      kTrickPlayFactor, kNaluLengthSize, kLanguage, kIsEncrypted));
   MuxerOptions options;
 
-  options.segment_duration = 1.0;
-  const double kClearLeadSeconds = 1.0;
   options.segment_template = "file$Number$.ts";
 
   MockMuxerListener mock_listener;
   TsSegmenter segmenter(options, &mock_listener);
 
-  ON_CALL(*mock_ts_writer_, Initialize(_)).WillByDefault(Return(true));
   ON_CALL(*mock_ts_writer_, NewSegment(_)).WillByDefault(Return(true));
   ON_CALL(*mock_ts_writer_, FinalizeSegment()).WillByDefault(Return(true));
   ON_CALL(*mock_ts_writer_, AddPesPacketMock(_)).WillByDefault(Return(true));
@@ -547,14 +342,11 @@ TEST_F(TsSegmenterTest, WithEncryptionWithClearLead) {
   const uint8_t kAnyData[] = {
       0x01, 0x0F, 0x3C,
   };
-  scoped_refptr<MediaSample> sample1 =
+  std::shared_ptr<MediaSample> sample1 =
       MediaSample::CopyFrom(kAnyData, arraysize(kAnyData), kIsKeyFrame);
-  scoped_refptr<MediaSample> sample2 =
-      MediaSample::CopyFrom(kAnyData, arraysize(kAnyData), kIsKeyFrame);
-
-  // Something longer than 1.0 (segment duration and clear lead).
   sample1->set_duration(kTimeScale * 2);
-  // The length of the second sample doesn't really matter.
+  std::shared_ptr<MediaSample> sample2 =
+      MediaSample::CopyFrom(kAnyData, arraysize(kAnyData), kIsKeyFrame);
   sample2->set_duration(kTimeScale * 3);
 
   EXPECT_CALL(*mock_pes_packet_generator_, PushSample(_))
@@ -594,32 +386,20 @@ TEST_F(TsSegmenterTest, WithEncryptionWithClearLead) {
       .InSequence(pes_packet_sequence)
       .WillOnce(Return(new PesPacket()));
 
-  MockPesPacketGenerator* mock_pes_packet_generator_raw =
-      mock_pes_packet_generator_.get();
-
   MockTsWriter* mock_ts_writer_raw = mock_ts_writer_.get();
 
-  segmenter.InjectTsWriterForTesting(std::move(mock_ts_writer_));
   segmenter.InjectPesPacketGeneratorForTesting(
       std::move(mock_pes_packet_generator_));
 
-  MockKeySource mock_key_source;
-  // This should be called AFTER the first AddSample().
-  EXPECT_CALL(mock_key_source, GetKey(KeySource::TRACK_TYPE_HD, _))
-      .WillOnce(Return(Status::OK));
+  EXPECT_OK(segmenter.Initialize(*stream_info));
+  segmenter.InjectTsWriterForTesting(std::move(mock_ts_writer_));
+  EXPECT_OK(segmenter.AddSample(*sample1));
 
-  EXPECT_CALL(mock_listener, OnEncryptionInfoReady(_, _, _, _, _));
-  EXPECT_OK(segmenter.Initialize(*stream_info, &mock_key_source, 0,
-                                 kClearLeadSeconds));
-  EXPECT_OK(segmenter.AddSample(sample1));
-
-  // These should be called AFTER the first AddSample(), before the second
-  // segment.
-  EXPECT_CALL(mock_listener, OnEncryptionStart());
-  EXPECT_CALL(*mock_pes_packet_generator_raw, SetEncryptionKeyMock(_))
-      .WillOnce(Return(true));
+  EXPECT_OK(segmenter.FinalizeSegment(1, sample1->duration()));
+  // Signal encrypted if sample is encrypted.
   EXPECT_CALL(*mock_ts_writer_raw, SignalEncrypted());
-  EXPECT_OK(segmenter.AddSample(sample2));
+  sample2->set_is_encrypted(true);
+  EXPECT_OK(segmenter.AddSample(*sample2));
 }
 
 }  // namespace mp2t

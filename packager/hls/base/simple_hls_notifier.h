@@ -7,6 +7,7 @@
 #ifndef PACKAGER_HLS_BASE_SIMPLE_HLS_NOTIFIER_H_
 #define PACKAGER_HLS_BASE_SIMPLE_HLS_NOTIFIER_H_
 
+#include <list>
 #include <map>
 #include <memory>
 #include <string>
@@ -14,11 +15,11 @@
 
 #include "packager/base/atomic_sequence_num.h"
 #include "packager/base/macros.h"
-#include "packager/base/stl_util.h"
 #include "packager/base/synchronization/lock.h"
 #include "packager/hls/base/hls_notifier.h"
 #include "packager/hls/base/master_playlist.h"
 #include "packager/hls/base/media_playlist.h"
+#include "packager/hls/public/hls_params.h"
 
 namespace shaka {
 namespace hls {
@@ -28,28 +29,17 @@ namespace hls {
 class MediaPlaylistFactory {
  public:
   virtual ~MediaPlaylistFactory();
-  virtual std::unique_ptr<MediaPlaylist> Create(
-      MediaPlaylist::MediaPlaylistType type,
-      const std::string& file_name,
-      const std::string& name,
-      const std::string& group_id);
+  virtual std::unique_ptr<MediaPlaylist> Create(const HlsParams& hls_params,
+                                                const std::string& file_name,
+                                                const std::string& name,
+                                                const std::string& group_id);
 };
 
 /// This is thread safe.
 class SimpleHlsNotifier : public HlsNotifier {
  public:
-  /// @a prefix is used as hte prefix for all the URIs for Media Playlist. This
-  /// includes the segment URIs in the Media Playlists.
-  /// @param profile is the profile of the playlists.
-  /// @param prefix is the used as the prefix for MediaPlaylist URIs. May be
-  ///        empty for relative URI from the playlist.
-  /// @param output_dir is the output directory of the playlists. May be empty
-  ///        to write to current directory.
-  /// @param master_playlist_name is the name of the master playlist.
-  SimpleHlsNotifier(HlsProfile profile,
-                    const std::string& prefix,
-                    const std::string& output_dir,
-                    const std::string& master_playlist_name);
+  /// @param hls_params contains parameters for setting up the notifier.
+  explicit SimpleHlsNotifier(const HlsParams& hls_params);
   ~SimpleHlsNotifier() override;
 
   /// @name HlsNotifier implemetation overrides.
@@ -64,7 +54,13 @@ class SimpleHlsNotifier : public HlsNotifier {
                         const std::string& segment_name,
                         uint64_t start_time,
                         uint64_t duration,
+                        uint64_t start_byte_offset,
                         uint64_t size) override;
+  bool NotifyKeyFrame(uint32_t stream_id,
+                      uint64_t timestamp,
+                      uint64_t start_byte_offset,
+                      uint64_t size) override;
+  bool NotifyCueEvent(uint32_t container_id, uint64_t timestamp) override;
   bool NotifyEncryptionUpdate(
       uint32_t stream_id,
       const std::vector<uint8_t>& key_id,
@@ -77,13 +73,20 @@ class SimpleHlsNotifier : public HlsNotifier {
  private:
   friend class SimpleHlsNotifierTest;
 
-  const std::string prefix_;
-  const std::string output_dir_;
+  struct StreamEntry {
+    std::unique_ptr<MediaPlaylist> media_playlist;
+    MediaPlaylist::EncryptionMethod encryption_method;
+  };
+
+  std::string output_dir_;
+  uint32_t target_duration_ = 0;
 
   std::unique_ptr<MediaPlaylistFactory> media_playlist_factory_;
   std::unique_ptr<MasterPlaylist> master_playlist_;
-  std::map<uint32_t, MediaPlaylist*> media_playlist_map_;
-  STLValueDeleter<decltype(media_playlist_map_)> media_playlist_map_deleter_;
+
+  // Maps to unique_ptr because StreamEntry also holds unique_ptr
+  std::map<uint32_t, std::unique_ptr<StreamEntry>> stream_map_;
+  std::list<MediaPlaylist*> media_playlists_;
 
   base::AtomicSequenceNumber sequence_number_;
 

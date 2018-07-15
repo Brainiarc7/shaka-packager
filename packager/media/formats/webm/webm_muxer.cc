@@ -8,7 +8,6 @@
 
 #include "packager/media/base/fourccs.h"
 #include "packager/media/base/media_sample.h"
-#include "packager/media/base/media_stream.h"
 #include "packager/media/base/stream_info.h"
 #include "packager/media/formats/webm/mkv_writer.h"
 #include "packager/media/formats/webm/multi_segment_segmenter.h"
@@ -22,40 +21,24 @@ namespace webm {
 WebMMuxer::WebMMuxer(const MuxerOptions& options) : Muxer(options) {}
 WebMMuxer::~WebMMuxer() {}
 
-Status WebMMuxer::Initialize() {
+Status WebMMuxer::InitializeMuxer() {
   CHECK_EQ(streams().size(), 1U);
 
-  if (crypto_period_duration_in_seconds() > 0) {
-    NOTIMPLEMENTED() << "Key rotation is not implemented for WebM";
-    return Status(error::UNIMPLEMENTED,
-                  "Key rotation is not implemented for WebM");
-  }
-
-  if (encryption_key_source() && (protection_scheme() != FOURCC_cenc)) {
-    NOTIMPLEMENTED()
-        << "WebM does not support protection scheme other than 'cenc'.";
-    return Status(error::UNIMPLEMENTED,
+  if (streams()[0]->is_encrypted() &&
+      streams()[0]->encryption_config().protection_scheme != FOURCC_cenc) {
+    LOG(ERROR) << "WebM does not support protection scheme other than 'cenc'.";
+    return Status(error::INVALID_ARGUMENT,
                   "WebM does not support protection scheme other than 'cenc'.");
   }
 
-  std::unique_ptr<MkvWriter> writer(new MkvWriter);
-  Status status = writer->Open(options().output_file_name);
-  if (!status.ok())
-    return status;
-
-  if (!options().single_segment) {
+  if (!options().segment_template.empty()) {
     segmenter_.reset(new MultiSegmentSegmenter(options()));
-  } else if (writer->Seekable()) {
-    segmenter_.reset(new SingleSegmentSegmenter(options()));
   } else {
     segmenter_.reset(new TwoPassSingleSegmentSegmenter(options()));
   }
 
   Status initialized = segmenter_->Initialize(
-      std::move(writer), streams()[0]->info().get(), progress_listener(),
-      muxer_listener(), encryption_key_source(), max_sd_pixels(),
-      clear_lead_in_seconds());
-
+      *streams()[0], progress_listener(), muxer_listener());
   if (!initialized.ok())
     return initialized;
 
@@ -75,11 +58,25 @@ Status WebMMuxer::Finalize() {
   return Status::OK;
 }
 
-Status WebMMuxer::DoAddSample(const MediaStream* stream,
-                              scoped_refptr<MediaSample> sample) {
+Status WebMMuxer::AddSample(size_t stream_id, const MediaSample& sample) {
   DCHECK(segmenter_);
-  DCHECK(stream == streams()[0]);
+  DCHECK_EQ(stream_id, 0u);
   return segmenter_->AddSample(sample);
+}
+
+Status WebMMuxer::FinalizeSegment(size_t stream_id,
+                                  const SegmentInfo& segment_info) {
+  DCHECK(segmenter_);
+  DCHECK_EQ(stream_id, 0u);
+
+  if (segment_info.key_rotation_encryption_config) {
+    NOTIMPLEMENTED() << "Key rotation is not implemented for WebM.";
+    return Status(error::UNIMPLEMENTED,
+                  "Key rotation is not implemented for WebM");
+  }
+  return segmenter_->FinalizeSegment(segment_info.start_timestamp,
+                                     segment_info.duration,
+                                     segment_info.is_subsegment);
 }
 
 void WebMMuxer::FireOnMediaStartEvent() {
@@ -88,37 +85,43 @@ void WebMMuxer::FireOnMediaStartEvent() {
 
   DCHECK(!streams().empty()) << "Media started without a stream.";
 
-  const uint32_t timescale = streams().front()->info()->time_scale();
-  muxer_listener()->OnMediaStart(options(), *streams().front()->info(),
-                                 timescale, MuxerListener::kContainerWebM);
+  const uint32_t timescale = streams().front()->time_scale();
+  muxer_listener()->OnMediaStart(options(), *streams().front(), timescale,
+                                 MuxerListener::kContainerWebM);
 }
 
 void WebMMuxer::FireOnMediaEndEvent() {
   if (!muxer_listener())
     return;
 
+  MuxerListener::MediaRanges media_range;
+
   uint64_t init_range_start = 0;
   uint64_t init_range_end = 0;
   const bool has_init_range =
       segmenter_->GetInitRangeStartAndEnd(&init_range_start, &init_range_end);
+  if (has_init_range) {
+    Range r;
+    r.start = init_range_start;
+    r.end = init_range_end;
+    media_range.init_range = r;
+  }
 
   uint64_t index_range_start = 0;
   uint64_t index_range_end = 0;
   const bool has_index_range = segmenter_->GetIndexRangeStartAndEnd(
       &index_range_start, &index_range_end);
-
-  const float duration_seconds = segmenter_->GetDuration();
-
-  const int64_t file_size =
-      File::GetFileSize(options().output_file_name.c_str());
-  if (file_size <= 0) {
-    LOG(ERROR) << "Invalid file size: " << file_size;
-    return;
+  if (has_index_range) {
+    Range r;
+    r.start = index_range_start;
+    r.end = index_range_end;
+    media_range.index_range = r;
   }
 
-  muxer_listener()->OnMediaEnd(has_init_range, init_range_start, init_range_end,
-                               has_index_range, index_range_start,
-                               index_range_end, duration_seconds, file_size);
+  media_range.subsegment_ranges = segmenter_->GetSegmentRanges();
+
+  const float duration_seconds = segmenter_->GetDurationInSeconds();
+  muxer_listener()->OnMediaEnd(media_range, duration_seconds);
 }
 
 }  // namespace webm

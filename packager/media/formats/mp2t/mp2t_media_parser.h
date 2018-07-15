@@ -2,14 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef MEDIA_FORMATS_MP2T_MP2T_MEDIA_PARSER_H_
-#define MEDIA_FORMATS_MP2T_MP2T_MEDIA_PARSER_H_
+#ifndef PACKAGER_MEDIA_FORMATS_MP2T_MP2T_MEDIA_PARSER_H_
+#define PACKAGER_MEDIA_FORMATS_MP2T_MP2T_MEDIA_PARSER_H_
 
 #include <deque>
 #include <map>
 #include <memory>
 
-#include "packager/base/memory/ref_counted.h"
 #include "packager/media/base/byte_queue.h"
 #include "packager/media/base/media_parser.h"
 #include "packager/media/base/stream_info.h"
@@ -25,7 +24,7 @@ class PidState;
 class TsPacket;
 class TsSection;
 
-typedef std::deque<scoped_refptr<MediaSample> > SampleQueue;
+typedef std::deque<std::shared_ptr<MediaSample>> SampleQueue;
 
 class Mp2tMediaParser : public MediaParser {
  public:
@@ -42,7 +41,7 @@ class Mp2tMediaParser : public MediaParser {
   /// @}
 
  private:
-  typedef std::map<int, PidState*> PidMap;
+  typedef std::map<int, std::unique_ptr<PidState>> PidMap;
 
   // Callback invoked to register a Program Map Table.
   // Note: Does nothing if the PID is already registered.
@@ -56,12 +55,12 @@ class Mp2tMediaParser : public MediaParser {
 
   // Callback invoked each time the audio/video decoder configuration is
   // changed.
-  void OnNewStreamInfo(const scoped_refptr<StreamInfo>& new_stream_info);
+  void OnNewStreamInfo(const std::shared_ptr<StreamInfo>& new_stream_info);
 
   // Callback invoked by the ES media parser
   // to emit a new audio/video access unit.
   void OnEmitSample(uint32_t pes_pid,
-                    const scoped_refptr<MediaSample>& new_sample);
+                    const std::shared_ptr<MediaSample>& new_sample);
 
   // Invoke the initialization callback if needed.
   bool FinishInitializationIfNeeded();
@@ -87,6 +86,10 @@ class Mp2tMediaParser : public MediaParser {
 
   // Whether |init_cb_| has been invoked.
   bool is_initialized_;
+
+  // A map used to track unsupported stream types and make sure the error is
+  // only logged once.
+  std::map<uint8_t, bool> stream_type_logged_once_;
 
   DISALLOW_COPY_AND_ASSIGN(Mp2tMediaParser);
 };

@@ -4,12 +4,14 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_BASE_MUXER_OPTIONS_H_
-#define MEDIA_BASE_MUXER_OPTIONS_H_
+#ifndef PACKAGER_MEDIA_BASE_MUXER_OPTIONS_H_
+#define PACKAGER_MEDIA_BASE_MUXER_OPTIONS_H_
 
 #include <stdint.h>
 
 #include <string>
+
+#include "packager/media/public/mp4_output_params.h"
 
 namespace shaka {
 namespace media {
@@ -19,47 +21,20 @@ struct MuxerOptions {
   MuxerOptions();
   ~MuxerOptions();
 
-  /// Generate a single segment for each media presentation. This option
-  /// should be set for on demand profile.
-  bool single_segment;
-
-  /// Segment duration in seconds. If single_segment is specified, this
-  /// parameter sets the duration of a subsegment; otherwise, this parameter
-  /// sets the duration of a segment. A segment can contain one or many
-  /// fragments.
-  double segment_duration;
-
-  /// Fragment duration in seconds. Should not be larger than the segment
-  /// duration.
-  double fragment_duration;
-
-  /// Force segments to begin with stream access points. Segment duration may
-  /// not be exactly what specified by segment_duration.
-  bool segment_sap_aligned;
-
-  /// Force fragments to begin with stream access points. Fragment duration
-  /// may not be exactly what specified by segment_duration. Setting to true
-  /// implies that segment_sap_aligned is true as well.
-  bool fragment_sap_aligned;
-
-  /// For ISO BMFF only.
-  /// Set the number of subsegments in each SIDX box. If 0, a single SIDX box
-  /// is used per segment. If -1, no SIDX box is used. Otherwise, the Muxer
-  /// will pack N subsegments in the root SIDX of the segment, with
-  /// segment_duration/N/fragment_duration fragments per subsegment.
-  int num_subsegments_per_sidx;
-
-  /// For ISO BMFF only.
-  /// Set the flag use_decoding_timestamp_in_timeline, which if set to true, use
-  /// decoding timestamp instead of presentation timestamp in media timeline,
-  /// which is needed to workaround a Chromium bug that decoding timestamp is
-  /// used in buffered range, https://crbug.com/398130.
-  bool mp4_use_decoding_timestamp_in_timeline;
+  /// MP4 (ISO-BMFF) specific parameters.
+  Mp4OutputParams mp4_params;
 
   /// Output file name. If segment_template is not specified, the Muxer
   /// generates this single output file with all segments concatenated;
   /// Otherwise, it specifies the init segment name.
   std::string output_file_name;
+
+  /// Output file index. With one file per Representation per Period, there
+  /// could be more than one file generated with Ad Cues present. This is the
+  /// 0-based index of the output file.
+  /// TODO(kqyang): Remove when the EPT adjustment logic in
+  /// Fragmenter::FinalizeFragment is removed.
+  size_t output_file_index = 0;
 
   /// Specify output segment name pattern for generated segments. It can
   /// furthermore be configured by using a subset of the SegmentTemplate
@@ -72,13 +47,10 @@ struct MuxerOptions {
 
   /// User-specified bit rate for the media stream. If zero, the muxer will
   /// attempt to estimate.
-  uint32_t bandwidth;
-
-  // Enable/disable subsample encryption for WebM containers.
-  bool webm_subsample_encryption;
+  uint32_t bandwidth = 0;
 };
 
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_BASE_MUXER_OPTIONS_H_
+#endif  // PACKAGER_MEDIA_BASE_MUXER_OPTIONS_H_

@@ -5,20 +5,23 @@
 # https://developers.google.com/open-source/licenses/bsd
 
 {
-  'includes': [
-    '../../../common.gypi',
-  ],
+  'variables': {
+    'shaka_code': 1,
+  },
   'targets': [
     {
       'target_name': 'mp2t',
       'type': '<(component)',
       'sources': [
+        'ac3_header.cc',
+        'ac3_header.h',
         'adts_header.cc',
         'adts_header.h',
+        'audio_header.h',
         'continuity_counter.cc',
         'continuity_counter.h',
-        'es_parser_adts.cc',
-        'es_parser_adts.h',
+        'es_parser_audio.cc',
+        'es_parser_audio.h',
         'es_parser_h264.cc',
         'es_parser_h264.h',
         'es_parser_h265.cc',
@@ -50,11 +53,13 @@
         'ts_section_psi.h',
         'ts_segmenter.cc',
         'ts_segmenter.h',
+        'ts_stream_type.h',
         'ts_writer.cc',
         'ts_writer.h',
       ],
       'dependencies': [
         '../../base/media_base.gyp:media_base',
+        '../../crypto/crypto.gyp:crypto',
         '../../codecs/codecs.gyp:codecs',
       ],
     },
@@ -62,6 +67,7 @@
       'target_name': 'mp2t_unittest',
       'type': '<(gtest_target_type)',
       'sources': [
+        'ac3_header_unittest.cc',
         'adts_header_unittest.cc',
         'es_parser_h264_unittest.cc',
         'es_parser_h26x_unittest.cc',
@@ -77,7 +83,6 @@
         '../../codecs/codecs.gyp:codecs',
         '../../event/media_event.gyp:mock_muxer_listener',
         '../../test/media_test.gyp:media_test_support',
-        '../mpeg/mpeg.gyp:mpeg',
         'mp2t',
       ]
     },

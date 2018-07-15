@@ -4,13 +4,15 @@
 
 #include "packager/media/formats/mp4/mp4_media_parser.h"
 
+#include <algorithm>
 #include <limits>
 
 #include "packager/base/callback.h"
 #include "packager/base/callback_helpers.h"
 #include "packager/base/logging.h"
-#include "packager/base/memory/ref_counted.h"
 #include "packager/base/strings/string_number_conversions.h"
+#include "packager/file/file.h"
+#include "packager/file/file_closer.h"
 #include "packager/media/base/audio_stream_info.h"
 #include "packager/media/base/buffer_reader.h"
 #include "packager/media/base/decrypt_config.h"
@@ -19,12 +21,12 @@
 #include "packager/media/base/media_sample.h"
 #include "packager/media/base/rcheck.h"
 #include "packager/media/base/video_stream_info.h"
+#include "packager/media/codecs/ac3_audio_util.h"
 #include "packager/media/codecs/avc_decoder_configuration_record.h"
+#include "packager/media/codecs/ec3_audio_util.h"
 #include "packager/media/codecs/es_descriptor.h"
 #include "packager/media/codecs/hevc_decoder_configuration_record.h"
 #include "packager/media/codecs/vp_codec_configuration_record.h"
-#include "packager/media/file/file.h"
-#include "packager/media/file/file_closer.h"
 #include "packager/media/formats/mp4/box_definitions.h"
 #include "packager/media/formats/mp4/box_reader.h"
 #include "packager/media/formats/mp4/track_run_iterator.h"
@@ -40,14 +42,29 @@ uint64_t Rescale(uint64_t time_in_old_scale,
   return (static_cast<double>(time_in_old_scale) / old_scale) * new_scale;
 }
 
+H26xStreamFormat GetH26xStreamFormat(FourCC fourcc) {
+  switch (fourcc) {
+    case FOURCC_avc1:
+      return H26xStreamFormat::kNalUnitStreamWithoutParameterSetNalus;
+    case FOURCC_avc3:
+      return H26xStreamFormat::kNalUnitStreamWithParameterSetNalus;
+    case FOURCC_hev1:
+      return H26xStreamFormat::kNalUnitStreamWithParameterSetNalus;
+    case FOURCC_hvc1:
+      return H26xStreamFormat::kNalUnitStreamWithoutParameterSetNalus;
+    default:
+      return H26xStreamFormat::kUnSpecified;
+  }
+}
+
 Codec FourCCToCodec(FourCC fourcc) {
   switch (fourcc) {
     case FOURCC_avc1:
+    case FOURCC_avc3:
       return kCodecH264;
     case FOURCC_hev1:
-      return kCodecHEV1;
     case FOURCC_hvc1:
-      return kCodecHVC1;
+      return kCodecH265;
     case FOURCC_vp08:
       return kCodecVP8;
     case FOURCC_vp09:
@@ -72,13 +89,31 @@ Codec FourCCToCodec(FourCC fourcc) {
       return kCodecAC3;
     case FOURCC_ec_3:
       return kCodecEAC3;
+    case FOURCC_fLaC:
+      return kCodecFlac;
     default:
       return kUnknownCodec;
   }
 }
 
-// Default DTS audio number of channels for 5.1 channel layout.
-const uint8_t kDtsAudioNumChannels = 6;
+Codec ObjectTypeToCodec(ObjectType object_type) {
+  switch (object_type) {
+    case ObjectType::kISO_14496_3:
+    case ObjectType::kISO_13818_7_AAC_LC:
+      return kCodecAAC;
+    case ObjectType::kDTSC:
+      return kCodecDTSC;
+    case ObjectType::kDTSE:
+      return kCodecDTSE;
+    case ObjectType::kDTSH:
+      return kCodecDTSH;
+    case ObjectType::kDTSL:
+      return kCodecDTSL;
+    default:
+      return kUnknownCodec;
+  }
+}
+
 const uint64_t kNanosecondsPerSecond = 1000000000ull;
 
 }  // namespace
@@ -242,12 +277,22 @@ bool MP4MediaParser::ParseBox(bool* err) {
     return false;
 
   if (reader->type() == FOURCC_mdat) {
-    // The code ends up here only if a MOOV box is not yet seen.
-    DCHECK(!moov_);
-
-    NOTIMPLEMENTED() << " Files with MDAT before MOOV is not supported yet.";
-    *err = true;
-    return false;
+    if (!moov_) {
+      // For seekable files, we seek to the 'moov' and load the 'moov' first
+      // then seek back (see LoadMoov function for details); we do not support
+      // having 'mdat' before 'moov' for non-seekable files. The code ends up
+      // here only if it is a non-seekable file.
+      NOTIMPLEMENTED() << " Non-seekable Files with 'mdat' box before 'moov' "
+                          "box is not supported.";
+      *err = true;
+      return false;
+    } else {
+      // This can happen if there are unused 'mdat' boxes, which is unusual
+      // but allowed by the spec. Ignore the 'mdat' and proceed.
+      LOG(INFO)
+          << "Ignore unused 'mdat' box - this could be as a result of extra "
+             "not usable 'mdat' or 'mdat' associated with unrecognized track.";
+    }
   }
 
   // Set up mdat offset for ReadMDATsUntil().
@@ -268,7 +313,7 @@ bool MP4MediaParser::ParseBox(bool* err) {
     VLOG(2) << "Skipping top-level box: " << FourCCToString(reader->type());
   }
 
-  queue_.Pop(reader->size());
+  queue_.Pop(static_cast<int>(reader->size()));
   return !(*err);
 }
 
@@ -280,7 +325,7 @@ bool MP4MediaParser::ParseMoov(BoxReader* reader) {
   RCHECK(moov_->Parse(reader));
   runs_.reset();
 
-  std::vector<scoped_refptr<StreamInfo> > streams;
+  std::vector<std::shared_ptr<StreamInfo>> streams;
 
   for (std::vector<Track>::const_iterator track = moov_->tracks.begin();
        track != moov_->tracks.end(); ++track) {
@@ -337,8 +382,8 @@ bool MP4MediaParser::ParseMoov(BoxReader* reader) {
       const AudioSampleEntry& entry = samp_descr.audio_entries[desc_idx];
       const FourCC actual_format = entry.GetActualFormat();
       Codec codec = FourCCToCodec(actual_format);
-      uint8_t num_channels = 0;
-      uint32_t sampling_frequency = 0;
+      uint8_t num_channels = entry.channelcount;
+      uint32_t sampling_frequency = entry.samplerate;
       uint64_t codec_delay_ns = 0;
       uint8_t audio_object_type = 0;
       uint32_t max_bitrate = 0;
@@ -347,91 +392,67 @@ bool MP4MediaParser::ParseMoov(BoxReader* reader) {
 
       switch (actual_format) {
         case FOURCC_mp4a:
-          // Check if it is MPEG4 AAC defined in ISO 14496 Part 3 or
-          // supported MPEG2 AAC variants.
-          if (entry.esds.es_descriptor.IsAAC()) {
-            codec = kCodecAAC;
+          max_bitrate = entry.esds.es_descriptor.max_bitrate();
+          avg_bitrate = entry.esds.es_descriptor.avg_bitrate();
+
+          codec = ObjectTypeToCodec(entry.esds.es_descriptor.object_type());
+          if (codec == kCodecAAC) {
             const AACAudioSpecificConfig& aac_audio_specific_config =
                 entry.esds.aac_audio_specific_config;
-            num_channels = aac_audio_specific_config.num_channels();
-            sampling_frequency = aac_audio_specific_config.frequency();
-            audio_object_type = aac_audio_specific_config.audio_object_type();
+            num_channels = aac_audio_specific_config.GetNumChannels();
+            sampling_frequency =
+                aac_audio_specific_config.GetSamplesPerSecond();
+            audio_object_type = aac_audio_specific_config.GetAudioObjectType();
             codec_config = entry.esds.es_descriptor.decoder_specific_info();
-            break;
-          } else if (entry.esds.es_descriptor.IsDTS()) {
-            ObjectType audio_type = entry.esds.es_descriptor.object_type();
-            switch (audio_type) {
-              case kDTSC:
-                codec = kCodecDTSC;
-                break;
-              case kDTSE:
-                codec = kCodecDTSE;
-                break;
-              case kDTSH:
-                codec = kCodecDTSH;
-                break;
-              case kDTSL:
-                codec = kCodecDTSL;
-                break;
-              default:
-                LOG(ERROR) << "Unsupported audio type " << audio_type
-                           << " in stsd box.";
-                return false;
-            }
-            num_channels = entry.esds.aac_audio_specific_config.num_channels();
-            // For dts audio in esds, current supported number of channels is 6
-            // as the only supported channel layout is 5.1.
-            if (num_channels != kDtsAudioNumChannels) {
-              LOG(ERROR) << "Unsupported channel count " << num_channels
-                         << " for audio type " << audio_type << ".";
-              return false;
-            }
-            sampling_frequency = entry.samplerate;
-            max_bitrate = entry.esds.es_descriptor.max_bitrate();
-            avg_bitrate = entry.esds.es_descriptor.avg_bitrate();
-          } else {
-            LOG(ERROR) << "Unsupported audio format 0x" << std::hex
-                       << actual_format << " in stsd box.";
-            return false;
+          } else if (codec == kUnknownCodec) {
+            // Intentionally not to fail in the parser as there may be multiple
+            // streams in the source content, which allows the supported stream
+            // to be packaged. An error will be returned if the unsupported
+            // stream is passed to the muxer.
+            LOG(WARNING) << "Unsupported audio object type "
+                         << static_cast<int>(
+                                entry.esds.es_descriptor.object_type())
+                         << " in stsd.es_desriptor.";
           }
           break;
         case FOURCC_dtsc:
+          FALLTHROUGH_INTENDED;
+        case FOURCC_dtse:
           FALLTHROUGH_INTENDED;
         case FOURCC_dtsh:
           FALLTHROUGH_INTENDED;
         case FOURCC_dtsl:
           FALLTHROUGH_INTENDED;
-        case FOURCC_dtse:
-          FALLTHROUGH_INTENDED;
         case FOURCC_dtsm:
           codec_config = entry.ddts.extra_data;
           max_bitrate = entry.ddts.max_bitrate;
           avg_bitrate = entry.ddts.avg_bitrate;
-          num_channels = entry.channelcount;
-          sampling_frequency = entry.samplerate;
           break;
         case FOURCC_ac_3:
           codec_config = entry.dac3.data;
-          num_channels = entry.channelcount;
-          sampling_frequency = entry.samplerate;
+          num_channels = static_cast<uint8_t>(GetAc3NumChannels(codec_config));
           break;
         case FOURCC_ec_3:
           codec_config = entry.dec3.data;
-          num_channels = entry.channelcount;
-          sampling_frequency = entry.samplerate;
+          num_channels = static_cast<uint8_t>(GetEc3NumChannels(codec_config));
+          break;
+        case FOURCC_fLaC:
+          codec_config = entry.dfla.data;
           break;
         case FOURCC_Opus:
           codec_config = entry.dops.opus_identification_header;
-          num_channels = entry.channelcount;
-          sampling_frequency = entry.samplerate;
-          RCHECK(sampling_frequency != 0);
           codec_delay_ns =
               entry.dops.preskip * kNanosecondsPerSecond / sampling_frequency;
           break;
         default:
-          LOG(ERROR) << "Unsupported audio format 0x" << std::hex
-                     << actual_format << " in stsd box.";
-          return false;
+          // Intentionally not to fail in the parser as there may be multiple
+          // streams in the source content, which allows the supported stream to
+          // be packaged.
+          // An error will be returned if the unsupported stream is passed to
+          // the muxer.
+          LOG(WARNING) << "Unsupported audio format '"
+                       << FourCCToString(actual_format) << "' in stsd box.";
+          break;
       }
 
       // Extract possible seek preroll.
@@ -462,10 +483,13 @@ bool MP4MediaParser::ParseMoov(BoxReader* reader) {
         break;
       }
 
+      // The stream will be decrypted if a |decryptor_source_| is available.
       const bool is_encrypted =
-          entry.sinf.info.track_encryption.default_is_protected == 1;
+          decryptor_source_
+              ? false
+              : entry.sinf.info.track_encryption.default_is_protected == 1;
       DVLOG(1) << "is_audio_track_encrypted_: " << is_encrypted;
-      streams.push_back(new AudioStreamInfo(
+      streams.emplace_back(new AudioStreamInfo(
           track->header.track_id, timescale, duration, codec,
           AudioStreamInfo::GetCodecString(codec, audio_object_type),
           codec_config.data(), codec_config.size(), entry.samplesize,
@@ -494,13 +518,14 @@ bool MP4MediaParser::ParseMoov(BoxReader* reader) {
       const FourCC actual_format = entry.GetActualFormat();
       const Codec video_codec = FourCCToCodec(actual_format);
       switch (actual_format) {
-        case FOURCC_avc1: {
+        case FOURCC_avc1:
+        case FOURCC_avc3: {
           AVCDecoderConfigurationRecord avc_config;
           if (!avc_config.Parse(entry.codec_configuration.data)) {
             LOG(ERROR) << "Failed to parse avcc.";
             return false;
           }
-          codec_string = avc_config.GetCodecString();
+          codec_string = avc_config.GetCodecString(actual_format);
           nalu_length_size = avc_config.nalu_length_size();
 
           if (coded_width != avc_config.coded_width() ||
@@ -537,7 +562,7 @@ bool MP4MediaParser::ParseMoov(BoxReader* reader) {
             LOG(ERROR) << "Failed to parse hevc.";
             return false;
           }
-          codec_string = hevc_config.GetCodecString(video_codec);
+          codec_string = hevc_config.GetCodecString(actual_format);
           nalu_length_size = hevc_config.nalu_length_size();
           break;
         }
@@ -553,21 +578,43 @@ bool MP4MediaParser::ParseMoov(BoxReader* reader) {
           break;
         }
         default:
-          LOG(ERROR) << "Unsupported video format "
-                     << FourCCToString(actual_format) << " in stsd box.";
-        return false;
+          // Intentionally not to fail in the parser as there may be multiple
+          // streams in the source content, which allows the supported stream to
+          // be packaged.
+          // An error will be returned if the unsupported stream is passed to
+          // the muxer.
+          LOG(WARNING) << "Unsupported video format '"
+                       << FourCCToString(actual_format) << "' in stsd box.";
+          break;
       }
 
+      // The stream will be decrypted if a |decryptor_source_| is available.
       const bool is_encrypted =
-          entry.sinf.info.track_encryption.default_is_protected == 1;
+          decryptor_source_
+              ? false
+              : entry.sinf.info.track_encryption.default_is_protected == 1;
       DVLOG(1) << "is_video_track_encrypted_: " << is_encrypted;
-      streams.push_back(new VideoStreamInfo(
+      std::shared_ptr<VideoStreamInfo> video_stream_info(new VideoStreamInfo(
           track->header.track_id, timescale, duration, video_codec,
-          codec_string, entry.codec_configuration.data.data(),
+          GetH26xStreamFormat(actual_format), codec_string,
+          entry.codec_configuration.data.data(),
           entry.codec_configuration.data.size(), coded_width, coded_height,
           pixel_width, pixel_height,
-          0,  // trick_play_rate
+          0,  // trick_play_factor
           nalu_length_size, track->media.header.language.code, is_encrypted));
+
+      // Set pssh raw data if it has.
+      if (moov_->pssh.size() > 0) {
+        std::vector<uint8_t> pssh_raw_data;
+        for (const auto& pssh : moov_->pssh) {
+          pssh_raw_data.insert(pssh_raw_data.end(), pssh.raw_box.begin(),
+                               pssh.raw_box.end());
+        }
+        video_stream_info->set_eme_init_data(pssh_raw_data.data(),
+                                             pssh_raw_data.size());
+      }
+
+      streams.push_back(video_stream_info);
     }
   }
 
@@ -603,27 +650,18 @@ bool MP4MediaParser::FetchKeysIfNecessary(
   if (!decryption_key_source_)
     return true;
 
-  Status status;
-  for (std::vector<ProtectionSystemSpecificHeader>::const_iterator iter =
-           headers.begin(); iter != headers.end(); ++iter) {
-    status = decryption_key_source_->FetchKeys(iter->raw_box);
-    if (!status.ok()) {
-      // If there is an error, try using the next PSSH box and report if none
-      // work.
-      VLOG(1) << "Unable to fetch decryption keys: " << status
-              << ", trying the next PSSH box";
-      continue;
-    }
-    return true;
+  std::vector<uint8_t> pssh_raw_data;
+  for (const auto& header : headers) {
+    pssh_raw_data.insert(pssh_raw_data.end(), header.raw_box.begin(),
+                         header.raw_box.end());
   }
-
+  Status status =
+      decryption_key_source_->FetchKeys(EmeInitDataType::CENC, pssh_raw_data);
   if (!status.ok()) {
     LOG(ERROR) << "Error fetching decryption keys: " << status;
     return false;
   }
-
-  LOG(ERROR) << "No viable 'pssh' box found for content decryption.";
-  return false;
+  return true;
 }
 
 bool MP4MediaParser::EnqueueSample(bool* err) {
@@ -680,25 +718,43 @@ bool MP4MediaParser::EnqueueSample(bool* err) {
     return false;
   }
 
-  scoped_refptr<MediaSample> stream_sample(MediaSample::CopyFrom(
-      buf, runs_->sample_size(), runs_->is_keyframe()));
+  const uint8_t* media_data = buf;
+  const size_t media_data_size = runs_->sample_size();
+  // Use a dummy data size of 0 to avoid copying overhead.
+  // Actual media data is set later.
+  const size_t kDummyDataSize = 0;
+  std::shared_ptr<MediaSample> stream_sample(
+      MediaSample::CopyFrom(media_data, kDummyDataSize, runs_->is_keyframe()));
+
   if (runs_->is_encrypted()) {
-    if (!decryptor_source_) {
+    std::shared_ptr<uint8_t> decrypted_media_data(
+        new uint8_t[media_data_size], std::default_delete<uint8_t[]>());
+    std::unique_ptr<DecryptConfig> decrypt_config = runs_->GetDecryptConfig();
+    if (!decrypt_config) {
       *err = true;
-      LOG(ERROR) << "Encrypted media sample encountered, but decryption is not "
-                    "enabled";
+      LOG(ERROR) << "Missing decrypt config.";
       return false;
     }
 
-    std::unique_ptr<DecryptConfig> decrypt_config = runs_->GetDecryptConfig();
-    if (!decrypt_config ||
-        !decryptor_source_->DecryptSampleBuffer(decrypt_config.get(),
-                                                stream_sample->writable_data(),
-                                                stream_sample->data_size())) {
-      *err = true;
-      LOG(ERROR) << "Cannot decrypt samples.";
-      return false;
+    if (!decryptor_source_) {
+      stream_sample->SetData(media_data, media_data_size);
+      // If the demuxer does not have the decryptor_source_, store
+      // decrypt_config so that the demuxed sample can be decrypted later.
+      stream_sample->set_decrypt_config(std::move(decrypt_config));
+      stream_sample->set_is_encrypted(true);
+    } else {
+      if (!decryptor_source_->DecryptSampleBuffer(decrypt_config.get(),
+                                                  media_data, media_data_size,
+                                                  decrypted_media_data.get())) {
+        *err = true;
+        LOG(ERROR) << "Cannot decrypt samples.";
+        return false;
+      }
+      stream_sample->TransferData(std::move(decrypted_media_data),
+                                  media_data_size);
     }
+  } else {
+    stream_sample->SetData(media_data, media_data_size);
   }
 
   stream_sample->set_dts(runs_->dts());

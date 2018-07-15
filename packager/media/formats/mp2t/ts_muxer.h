@@ -24,10 +24,12 @@ class TsMuxer : public Muxer {
 
  private:
   // Muxer implementation.
-  Status Initialize() override;
+  Status InitializeMuxer() override;
   Status Finalize() override;
-  Status DoAddSample(const MediaStream* stream,
-                     scoped_refptr<MediaSample> sample) override;
+  Status AddSample(size_t stream_id,
+                   const MediaSample& sample) override;
+  Status FinalizeSegment(size_t stream_id,
+                         const SegmentInfo& sample) override;
 
   void FireOnMediaStartEvent();
   void FireOnMediaEndEvent();

@@ -11,7 +11,8 @@
 #include <vector>
 
 #include "packager/base/macros.h"
-#include "packager/base/memory/ref_counted.h"
+#include "packager/media/base/decrypt_config.h"
+#include "packager/media/codecs/avc_decoder_configuration_record.h"
 
 namespace shaka {
 namespace media {
@@ -40,32 +41,51 @@ class NalUnitToByteStreamConverter {
   /// @param decoder_configuration_data is the pointer to a decoder config data.
   /// @param decoder_configuration_data_size is the size of @a
   ///        decoder_configuration_data.
-  /// @param escape_data flags whether the decoder configuration and data
-  ///        passed to ConvertUnitToByteStream() should be escaped with
-  ///        emulation prevention byte.
   /// @return true on success, false otherwise.
   virtual bool Initialize(const uint8_t* decoder_configuration_data,
-                          size_t decoder_configuration_data_size,
-                          bool escape_data);
+                          size_t decoder_configuration_data_size);
 
   /// Converts unit stream to byte stream using the data passed to Initialize().
   /// The method will function correctly even if @a sample is encrypted using
   /// SAMPLE-AES encryption.
   /// @param sample is the sample to be converted.
   /// @param sample_size is the size of @a sample.
-  /// @param output is set to the the converted sample, on success.
+  /// @param is_key_frame indicates if the sample is a key frame.
+  /// @param[out] output is set to the the converted sample, on success.
   /// @return true on success, false otherwise.
   virtual bool ConvertUnitToByteStream(const uint8_t* sample,
                                        size_t sample_size,
                                        bool is_key_frame,
                                        std::vector<uint8_t>* output);
 
+  /// Converts unit stream to byte stream using the data passed to Initialize()
+  /// and update the corresponding subsamples of the media sample.
+  /// The method will function correctly even if @a sample is encrypted using
+  /// SAMPLE-AES encryption.
+  /// @param sample is the sample to be converted.
+  /// @param sample_size is the size of @a sample.
+  /// @param is_key_frame indicates if the sample is a key frame.
+  /// @param escape_encrypted_nalu indicates whether an encrypted nalu should be
+  ///        escaped. This is needed for Apple Sample AES. Note that
+  ///        |subsamples| on return contains the sizes before escaping.
+  /// @param[out] output is set to the the converted sample, on success.
+  /// @param[in,out] subsamples has the input subsamples and output updated
+  ///                subsamples, on success.
+  /// @return true on success, false otherwise.
+  virtual bool ConvertUnitToByteStreamWithSubsamples(
+      const uint8_t* sample,
+      size_t sample_size,
+      bool is_key_frame,
+      bool escape_encrypted_nalu,
+      std::vector<uint8_t>* output,
+      std::vector<SubsampleEntry>* subsamples);
+
  private:
   friend class NalUnitToByteStreamConverterTest;
 
   int nalu_length_size_;
+  AVCDecoderConfigurationRecord decoder_config_;
   std::vector<uint8_t> decoder_configuration_in_byte_stream_;
-  bool escape_data_;
 
   DISALLOW_COPY_AND_ASSIGN(NalUnitToByteStreamConverter);
 };

@@ -6,20 +6,46 @@
 
 #include "packager/media/formats/webm/multi_segment_segmenter.h"
 
-#include "packager/media/base/media_stream.h"
 #include "packager/media/base/muxer_options.h"
 #include "packager/media/base/muxer_util.h"
 #include "packager/media/base/stream_info.h"
 #include "packager/media/event/muxer_listener.h"
+#include "packager/status_macros.h"
 #include "packager/third_party/libwebm/src/mkvmuxer.hpp"
 
 namespace shaka {
 namespace media {
 namespace webm {
+
 MultiSegmentSegmenter::MultiSegmentSegmenter(const MuxerOptions& options)
     : Segmenter(options), num_segment_(0) {}
 
 MultiSegmentSegmenter::~MultiSegmentSegmenter() {}
+
+Status MultiSegmentSegmenter::FinalizeSegment(uint64_t start_timestamp,
+                                              uint64_t duration_timestamp,
+                                              bool is_subsegment) {
+  CHECK(cluster());
+  RETURN_IF_ERROR(Segmenter::FinalizeSegment(
+      start_timestamp, duration_timestamp, is_subsegment));
+  if (!cluster()->Finalize())
+    return Status(error::FILE_FAILURE, "Error finalizing segment.");
+
+  if (!is_subsegment) {
+    const std::string segment_name = writer_->file()->file_name();
+    // Close the file, which also does flushing, to make sure the file is
+    // written before manifest is updated.
+    RETURN_IF_ERROR(writer_->Close());
+
+    if (muxer_listener()) {
+      const uint64_t size = cluster()->Size();
+      muxer_listener()->OnNewSegment(segment_name, start_timestamp,
+                                     duration_timestamp, size);
+    }
+    VLOG(1) << "WEBM file '" << writer_->file()->file_name() << "' finalized.";
+  }
+  return Status::OK;
+}
 
 bool MultiSegmentSegmenter::GetInitRangeStartAndEnd(uint64_t* start,
                                                     uint64_t* end) {
@@ -31,62 +57,39 @@ bool MultiSegmentSegmenter::GetIndexRangeStartAndEnd(uint64_t* start,
   return false;
 }
 
-Status MultiSegmentSegmenter::DoInitialize(std::unique_ptr<MkvWriter> writer) {
+std::vector<Range> MultiSegmentSegmenter::GetSegmentRanges() {
+  return std::vector<Range>();
+}
+
+Status MultiSegmentSegmenter::DoInitialize() {
+  std::unique_ptr<MkvWriter> writer(new MkvWriter);
+  Status status = writer->Open(options().output_file_name);
+  if (!status.ok())
+    return status;
   writer_ = std::move(writer);
   return WriteSegmentHeader(0, writer_.get());
 }
 
 Status MultiSegmentSegmenter::DoFinalize() {
-  Status status = FinalizeSegment();
-  status.Update(writer_->Close());
-  return status;
-}
-
-Status MultiSegmentSegmenter::FinalizeSegment() {
-  if (!cluster()->Finalize())
-    return Status(error::FILE_FAILURE, "Error finalizing segment.");
-
-  if (muxer_listener()) {
-    const uint64_t size = cluster()->Size();
-    const uint64_t start_webm_timecode = cluster()->timecode();
-    const uint64_t start_timescale = FromWebMTimecode(start_webm_timecode);
-    const uint64_t length = static_cast<uint64_t>(
-        cluster_length_sec() * info()->time_scale());
-    muxer_listener()->OnNewSegment(writer_->file()->file_name(),
-                                   start_timescale, length, size);
-  }
-
-  VLOG(1) << "WEBM file '" << writer_->file()->file_name() << "' finalized.";
   return Status::OK;
 }
 
-Status MultiSegmentSegmenter::NewSubsegment(uint64_t start_timescale) {
-  if (cluster() && !cluster()->Finalize())
-    return Status(error::FILE_FAILURE, "Error finalizing segment.");
-
-  uint64_t start_webm_timecode = FromBMFFTimescale(start_timescale);
-  return SetCluster(start_webm_timecode, 0, writer_.get());
-}
-
-Status MultiSegmentSegmenter::NewSegment(uint64_t start_timescale) {
-  if (cluster()) {
-    Status temp = FinalizeSegment();
-    if (!temp.ok())
-      return temp;
+Status MultiSegmentSegmenter::NewSegment(uint64_t start_timestamp,
+                                         bool is_subsegment) {
+  if (!is_subsegment) {
+    // Create a new file for the new segment.
+    std::string segment_name =
+        GetSegmentName(options().segment_template, start_timestamp,
+                       num_segment_, options().bandwidth);
+    writer_.reset(new MkvWriter);
+    Status status = writer_->Open(segment_name);
+    if (!status.ok())
+      return status;
+    num_segment_++;
   }
 
-  // Create a new file for the new segment.
-  std::string segment_name =
-      GetSegmentName(options().segment_template, start_timescale, num_segment_,
-                     options().bandwidth);
-  writer_.reset(new MkvWriter);
-  Status status = writer_->Open(segment_name);
-  if (!status.ok())
-    return status;
-  num_segment_++;
-
-  uint64_t start_webm_timecode = FromBMFFTimescale(start_timescale);
-  return SetCluster(start_webm_timecode, 0, writer_.get());
+  const uint64_t start_timecode = FromBmffTimestamp(start_timestamp);
+  return SetCluster(start_timecode, 0, writer_.get());
 }
 
 }  // namespace webm

@@ -9,7 +9,6 @@
 
 #include "packager/base/files/file_util.h"
 #include "packager/base/path_service.h"
-#include "packager/mpd/base/dash_iop_mpd_notifier.h"
 #include "packager/mpd/base/mock_mpd_notifier.h"
 #include "packager/mpd/base/mpd_options.h"
 #include "packager/mpd/test/mpd_builder_test_helper.h"
@@ -33,14 +32,11 @@ class TestMpdNotifierFactory : public MpdNotifierFactory {
   // std::unique_ptr.
   // For now we only need to return MockMpdNotifier() with these set of
   // expectations for all the tests.
-  std::unique_ptr<MpdNotifier> Create(DashProfile dash_profile,
-                                      const MpdOptions& mpd_options,
-                                      const std::vector<std::string>& base_urls,
-                                      const std::string& output_path) override {
-    EXPECT_EQ(expected_base_urls_, base_urls);
+  std::unique_ptr<MpdNotifier> Create(const MpdOptions& mpd_options) override {
+    EXPECT_EQ(expected_base_urls_, mpd_options.mpd_params.base_urls);
 
     std::unique_ptr<MockMpdNotifier> mock_notifier(
-        new MockMpdNotifier(kOnDemandProfile));
+        new MockMpdNotifier(mpd_options));
 
     EXPECT_CALL(*mock_notifier, Init()).WillOnce(Return(true));
     EXPECT_CALL(*mock_notifier, NotifyNewContainer(_, _))
@@ -92,8 +88,8 @@ TEST_F(MpdWriterTest, WriteMpdToFile) {
       GetTestDataFilePath(kFileNameVideoMediaInfo2);
 
   SetMpdNotifierFactoryForTest();
-  EXPECT_TRUE(mpd_writer_.AddFile(media_info_file1.AsUTF8Unsafe(), ""));
-  EXPECT_TRUE(mpd_writer_.AddFile(media_info_file2.AsUTF8Unsafe(), ""));
+  EXPECT_TRUE(mpd_writer_.AddFile(media_info_file1.AsUTF8Unsafe()));
+  EXPECT_TRUE(mpd_writer_.AddFile(media_info_file2.AsUTF8Unsafe()));
   mpd_writer_.AddBaseUrl(kBaseUrl1);
   mpd_writer_.AddBaseUrl(kBaseUrl2);
 

@@ -4,6 +4,7 @@
 
 #include "packager/media/formats/webm/webm_cluster_parser.h"
 
+#include <algorithm>
 #include <vector>
 
 #include "packager/base/logging.h"
@@ -27,8 +28,9 @@ const int64_t kMicrosecondsPerMillisecond = 1000;
 
 WebMClusterParser::WebMClusterParser(
     int64_t timecode_scale,
-    scoped_refptr<AudioStreamInfo> audio_stream_info,
-    scoped_refptr<VideoStreamInfo> video_stream_info,
+    std::shared_ptr<AudioStreamInfo> audio_stream_info,
+    std::shared_ptr<VideoStreamInfo> video_stream_info,
+    const VPCodecConfigurationRecord& vp_config,
     int64_t audio_default_duration,
     int64_t video_default_duration,
     const WebMTracksParser::TextTracks& text_tracks,
@@ -38,9 +40,11 @@ WebMClusterParser::WebMClusterParser(
     const MediaParser::NewSampleCB& new_sample_cb,
     const MediaParser::InitCB& init_cb,
     KeySource* decryption_key_source)
-    : timecode_multiplier_(timecode_scale / 1000.0),
+    : timecode_multiplier_(timecode_scale /
+                           static_cast<double>(kMicrosecondsPerMillisecond)),
       audio_stream_info_(audio_stream_info),
       video_stream_info_(video_stream_info),
+      vp_config_(vp_config),
       ignored_tracks_(ignored_tracks),
       audio_encryption_key_id_(audio_encryption_key_id),
       video_encryption_key_id_(video_encryption_key_id),
@@ -56,8 +60,13 @@ WebMClusterParser::WebMClusterParser(
              true,
              video_default_duration,
              new_sample_cb) {
-  if (decryption_key_source)
+  if (decryption_key_source) {
     decryptor_source_.reset(new DecryptorSource(decryption_key_source));
+    if (audio_stream_info_)
+      audio_stream_info_->set_is_encrypted(false);
+    if (video_stream_info_)
+      video_stream_info_->set_is_encrypted(false);
+  }
   for (WebMTracksParser::TextTracks::const_iterator it = text_tracks.begin();
        it != text_tracks.end();
        ++it) {
@@ -351,7 +360,7 @@ bool WebMClusterParser::OnBlock(bool is_simple_block,
 
   int64_t timestamp = (cluster_timecode_ + timecode) * timecode_multiplier_;
 
-  scoped_refptr<MediaSample> buffer;
+  std::shared_ptr<MediaSample> buffer;
   if (stream_type != kStreamText) {
     // Every encrypted Block has a signal byte and IV prepended to it. Current
     // encrypted WebM request for comments specification is here
@@ -367,21 +376,34 @@ bool WebMClusterParser::OnBlock(bool is_simple_block,
       return false;
     }
 
-    buffer = MediaSample::CopyFrom(data + data_offset, size - data_offset,
-                                   additional, additional_size, is_key_frame);
+    const uint8_t* media_data = data + data_offset;
+    const size_t media_data_size = size - data_offset;
+    // Use a dummy data size of 0 to avoid copying overhead.
+    // Actual media data is set later.
+    const size_t kDummyDataSize = 0;
+    buffer = MediaSample::CopyFrom(media_data, kDummyDataSize, additional,
+                                   additional_size, is_key_frame);
 
     if (decrypt_config) {
       if (!decryptor_source_) {
-        LOG(ERROR) << "Encrypted media sample encountered, but decryption is "
-                      "not enabled";
-        return false;
+        buffer->SetData(media_data, media_data_size);
+        // If the demuxer does not have the decryptor_source_, store
+        // decrypt_config so that the demuxed sample can be decrypted later.
+        buffer->set_decrypt_config(std::move(decrypt_config));
+        buffer->set_is_encrypted(true);
+      } else {
+        std::shared_ptr<uint8_t> decrypted_media_data(
+            new uint8_t[media_data_size], std::default_delete<uint8_t[]>());
+        if (!decryptor_source_->DecryptSampleBuffer(
+                decrypt_config.get(), media_data, media_data_size,
+                decrypted_media_data.get())) {
+          LOG(ERROR) << "Cannot decrypt samples";
+          return false;
+        }
+        buffer->TransferData(std::move(decrypted_media_data), media_data_size);
       }
-      if (!decryptor_source_->DecryptSampleBuffer(decrypt_config.get(),
-                                                  buffer->writable_data(),
-                                                  buffer->data_size())) {
-        LOG(ERROR) << "Cannot decrypt samples";
-        return false;
-      }
+    } else {
+      buffer->SetData(media_data, media_data_size);
     }
   } else {
     std::string id, settings, content;
@@ -406,7 +428,7 @@ bool WebMClusterParser::OnBlock(bool is_simple_block,
                            : kNoTimestamp);
 
   if (!init_cb_.is_null() && !initialized_) {
-    std::vector<scoped_refptr<StreamInfo>> streams;
+    std::vector<std::shared_ptr<StreamInfo>> streams;
     if (audio_stream_info_)
       streams.push_back(audio_stream_info_);
     if (video_stream_info_) {
@@ -435,15 +457,11 @@ bool WebMClusterParser::OnBlock(bool is_simple_block,
           return false;
         }
 
-        VPCodecConfigurationRecord codec_config;
-        if (!video_stream_info_->codec_config().empty())
-          codec_config.ParseWebM(video_stream_info_->codec_config());
-        codec_config.MergeFrom(vpx_parser->codec_config());
-
+        vp_config_.MergeFrom(vpx_parser->codec_config());
         video_stream_info_->set_codec_string(
-            codec_config.GetCodecString(video_stream_info_->codec()));
+            vp_config_.GetCodecString(video_stream_info_->codec()));
         std::vector<uint8_t> config_serialized;
-        codec_config.WriteMP4(&config_serialized);
+        vp_config_.WriteMP4(&config_serialized);
         video_stream_info_->set_codec_config(config_serialized);
         streams.push_back(video_stream_info_);
         init_cb_.Run(streams);
@@ -473,7 +491,7 @@ WebMClusterParser::Track::Track(int track_num,
 WebMClusterParser::Track::~Track() {}
 
 bool WebMClusterParser::Track::EmitBuffer(
-    const scoped_refptr<MediaSample>& buffer) {
+    const std::shared_ptr<MediaSample>& buffer) {
   DVLOG(2) << "EmitBuffer() : " << track_num_
            << " ts " << buffer->pts()
            << " dur " << buffer->duration()
@@ -492,7 +510,7 @@ bool WebMClusterParser::Track::EmitBuffer(
              << last_added_buffer_missing_duration_->duration()
              << " kf " << last_added_buffer_missing_duration_->is_key_frame()
              << " size " << last_added_buffer_missing_duration_->data_size();
-    scoped_refptr<MediaSample> updated_buffer =
+    std::shared_ptr<MediaSample> updated_buffer =
         last_added_buffer_missing_duration_;
     last_added_buffer_missing_duration_ = NULL;
     if (!EmitBufferHelp(updated_buffer))
@@ -539,7 +557,7 @@ void WebMClusterParser::Track::Reset() {
 }
 
 bool WebMClusterParser::Track::EmitBufferHelp(
-    const scoped_refptr<MediaSample>& buffer) {
+    const std::shared_ptr<MediaSample>& buffer) {
   DCHECK(!last_added_buffer_missing_duration_.get());
 
   int64_t duration = buffer->duration();

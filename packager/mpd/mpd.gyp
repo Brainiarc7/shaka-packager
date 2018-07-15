@@ -7,9 +7,9 @@
 # GYP file for any MPD generation targets.
 
 {
-  'includes': [
-    '../common.gypi',
-  ],
+  'variables': {
+    'shaka_code': 1,
+  },
   'targets': [
     {
       'target_name': 'media_info_proto',
@@ -21,26 +21,29 @@
         'proto_in_dir': 'base',
         'proto_out_dir': 'packager/mpd/base',
       },
-      'includes': ['../build/protoc.gypi'],
+      'includes': ['../protoc.gypi'],
+    },
+    {
+      # Used by both MPD and HLS. It should really be moved to a common
+      # directory shared by MPD and HLS.
+      'target_name': 'manifest_base',
+      'type': 'static_library',
+      'sources': [
+        'base/bandwidth_estimator.cc',
+        'base/bandwidth_estimator.h',
+      ],
       'dependencies': [
-        # This target needs to depend on 'protobuf_full_do_not_use' to generate
-        # non-LITE (full) protobuf. We need full protobuf to serialize and
-        # deserialize human readable protobuf messages.
-        '../third_party/protobuf/protobuf.gyp:protobuf_full_do_not_use',
+        '../base/base.gyp:base',
       ],
     },
     {
       'target_name': 'mpd_builder',
       'type': 'static_library',
       'sources': [
-        'base/bandwidth_estimator.cc',
-        'base/bandwidth_estimator.h',
+        'base/adaptation_set.cc',
+        'base/adaptation_set.h',
         'base/content_protection_element.cc',
         'base/content_protection_element.h',
-        'base/dash_iop_mpd_notifier.cc',
-        'base/dash_iop_mpd_notifier.h',
-        'base/language_utils.cc',
-        'base/language_utils.h',
         'base/mpd_builder.cc',
         'base/mpd_builder.h',
         'base/mpd_notifier_util.cc',
@@ -49,18 +52,26 @@
         'base/mpd_options.h',
         'base/mpd_utils.cc',
         'base/mpd_utils.h',
+        'base/period.cc',
+        'base/period.h',
+        'base/representation.cc',
+        'base/representation.h',
         'base/segment_info.h',
         'base/simple_mpd_notifier.cc',
         'base/simple_mpd_notifier.h',
         'base/xml/scoped_xml_ptr.h',
         'base/xml/xml_node.cc',
         'base/xml/xml_node.h',
+        'public/mpd_params.h',
       ],
       'dependencies': [
         '../base/base.gyp:base',
-        '../media/file/file.gyp:file',
+        '../file/file.gyp:file',
+        '../media/base/media_base.gyp:media_base',
+        '../third_party/gflags/gflags.gyp:gflags',
         '../third_party/libxml/libxml.gyp:libxml',
         '../version/version.gyp:version',
+        'manifest_base',
         'media_info_proto',
       ],
       'export_dependent_settings': [
@@ -86,9 +97,11 @@
       'target_name': 'mpd_unittest',
       'type': '<(gtest_target_type)',
       'sources': [
+        'base/adaptation_set_unittest.cc',
         'base/bandwidth_estimator_unittest.cc',
-        'base/dash_iop_mpd_notifier_unittest.cc',
         'base/mpd_builder_unittest.cc',
+        'base/period_unittest.cc',
+        'base/representation_unittest.cc',
         'base/simple_mpd_notifier_unittest.cc',
         'base/xml/xml_node_unittest.cc',
         'test/mpd_builder_test_helper.cc',
@@ -99,10 +112,11 @@
       ],
       'dependencies': [
         '../base/base.gyp:base',
-        '../media/file/file.gyp:file',
+        '../file/file.gyp:file',
         '../media/test/media_test.gyp:run_tests_with_atexit_manager',
         '../testing/gmock.gyp:gmock',
         '../testing/gtest.gyp:gtest',
+        '../third_party/gflags/gflags.gyp:gflags',
         'mpd_builder',
         'mpd_mocks',
         'mpd_util',
@@ -116,7 +130,7 @@
         'util/mpd_writer.h',
       ],
       'dependencies': [
-        '../media/file/file.gyp:file',
+        '../file/file.gyp:file',
         '../third_party/gflags/gflags.gyp:gflags',
         'mpd_builder',
         'mpd_mocks',

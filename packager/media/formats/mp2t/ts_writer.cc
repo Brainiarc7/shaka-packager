@@ -9,10 +9,10 @@
 #include <algorithm>
 
 #include "packager/base/logging.h"
-#include "packager/media/base/audio_stream_info.h"
 #include "packager/media/base/buffer_writer.h"
-#include "packager/media/base/stream_info.h"
-#include "packager/media/base/video_stream_info.h"
+#include "packager/media/base/media_sample.h"
+#include "packager/media/formats/mp2t/pes_packet.h"
+#include "packager/media/formats/mp2t/program_map_table_writer.h"
 #include "packager/media/formats/mp2t/ts_packet_writer_util.h"
 
 namespace shaka {
@@ -135,10 +135,9 @@ bool WritePesToFile(const PesPacket& pes,
       pes_packet_length > kMaxPesPacketLengthValue ? 0 : pes_packet_length));
   first_ts_packet_buffer.AppendBuffer(pes_header_writer);
 
-  const int available_payload =
+  const size_t available_payload =
       kTsPacketMaxPayloadWithPcr - first_ts_packet_buffer.Size();
-  const int bytes_consumed =
-      std::min(static_cast<int>(pes.data().size()), available_payload);
+  const size_t bytes_consumed = std::min(pes.data().size(), available_payload);
   first_ts_packet_buffer.AppendArray(pes.data().data(), bytes_consumed);
 
   BufferWriter output_writer;
@@ -159,42 +158,10 @@ bool WritePesToFile(const PesPacket& pes,
 
 }  // namespace
 
-TsWriter::TsWriter() {}
+TsWriter::TsWriter(std::unique_ptr<ProgramMapTableWriter> pmt_writer)
+    : pmt_writer_(std::move(pmt_writer)) {}
+
 TsWriter::~TsWriter() {}
-
-bool TsWriter::Initialize(const StreamInfo& stream_info) {
-  const StreamType stream_type = stream_info.stream_type();
-  if (stream_type != StreamType::kStreamVideo &&
-      stream_type != StreamType::kStreamAudio) {
-    LOG(ERROR) << "TsWriter cannot handle stream type " << stream_type
-               << " yet.";
-    return false;
-  }
-
-  if (stream_info.stream_type() == StreamType::kStreamVideo) {
-    const VideoStreamInfo& video_stream_info =
-        static_cast<const VideoStreamInfo&>(stream_info);
-    if (video_stream_info.codec() != Codec::kCodecH264) {
-      LOG(ERROR) << "TsWriter cannot handle video codec "
-                 << video_stream_info.codec() << " yet.";
-      return false;
-    }
-    pmt_writer_.reset(new H264ProgramMapTableWriter(&pmt_continuity_counter_));
-  } else {
-    DCHECK_EQ(stream_type, StreamType::kStreamAudio);
-    const AudioStreamInfo& audio_stream_info =
-        static_cast<const AudioStreamInfo&>(stream_info);
-    if (audio_stream_info.codec() != Codec::kCodecAAC) {
-      LOG(ERROR) << "TsWriter cannot handle audio codec "
-                 << audio_stream_info.codec() << " yet.";
-      return false;
-    }
-    pmt_writer_.reset(new AacProgramMapTableWriter(
-        audio_stream_info.codec_config(), &pmt_continuity_counter_));
-  }
-
-  return true;
-}
 
 bool TsWriter::NewSegment(const std::string& file_name) {
   if (current_file_) {
@@ -247,9 +214,12 @@ bool TsWriter::AddPesPacket(std::unique_ptr<PesPacket> pes_packet) {
   return true;
 }
 
-void TsWriter::SetProgramMapTableWriterForTesting(
-    std::unique_ptr<ProgramMapTableWriter> table_writer) {
-  pmt_writer_ = std::move(table_writer);
+base::Optional<uint64_t> TsWriter::GetFilePosition() {
+  if (!current_file_)
+    return base::nullopt;
+  uint64_t position;
+  return current_file_->Tell(&position) ? base::make_optional(position)
+                                        : base::nullopt;
 }
 
 }  // namespace mp2t

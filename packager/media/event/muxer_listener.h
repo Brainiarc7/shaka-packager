@@ -6,21 +6,23 @@
 //
 // Event handler for events fired by Muxer.
 
-#ifndef MEDIA_EVENT_MUXER_LISTENER_H_
-#define MEDIA_EVENT_MUXER_LISTENER_H_
+#ifndef PACKAGER_MEDIA_EVENT_MUXER_LISTENER_H_
+#define PACKAGER_MEDIA_EVENT_MUXER_LISTENER_H_
 
 #include <stdint.h>
 
 #include <string>
 #include <vector>
 
+#include "packager/base/optional.h"
 #include "packager/media/base/fourccs.h"
+#include "packager/media/base/range.h"
 
 namespace shaka {
 namespace media {
 
 struct MuxerOptions;
-class ProtectionSystemSpecificInfo;
+struct ProtectionSystemSpecificInfo;
 class StreamInfo;
 
 /// MuxerListener is an event handler that can be registered to a muxer.
@@ -33,20 +35,35 @@ class MuxerListener {
     kContainerUnknown = 0,
     kContainerMp4,
     kContainerMpeg2ts,
-    kContainerWebM
+    kContainerWebM,
+    kContainerText,
+    kContainerPackedAudio,
   };
 
-  virtual ~MuxerListener() {};
+  /// Structure for specifying ranges within a media file. This is mainly for
+  /// VOD content where OnMediaEnd() is actually used for finalization e.g.
+  /// writing out manifests.
+  struct MediaRanges {
+    /// Range of the initialization section of a segment.
+    base::Optional<Range> init_range;
+    /// Range of the index section of a segment.
+    base::Optional<Range> index_range;
+    /// Ranges of the subsegments (e.g. fragments).
+    /// The vector is empty if ranges are not specified. For example it
+    /// may not be a single file.
+    std::vector<Range> subsegment_ranges;
+  };
 
-  /// Called when the media's encryption information is ready. This should be
-  /// called before OnMediaStart(), if the media is encrypted.
-  /// All the parameters may be empty just to notify that the media is
-  /// encrypted.
-  /// For ISO BMFF (MP4) media:
-  /// If @a is_initial_encryption_info is true then @a key_id is the default_KID
-  /// in 'tenc' box.
-  /// If @a is_initial_encryption_info is false then @a key_id is the new key ID
-  /// for the for the next crypto period.
+  virtual ~MuxerListener() = default;
+
+  /// Called when the media's encryption information is ready.
+  /// OnEncryptionInfoReady with @a initial_encryption_info being true should be
+  /// called before OnMediaStart(), if the media is encrypted. All the
+  /// parameters may be empty just to notify that the media is encrypted. For
+  /// ISO BMFF (MP4) media: If @a is_initial_encryption_info is true then @a
+  /// key_id is the default_KID in 'tenc' box. If @a is_initial_encryption_info
+  /// is false then @a key_id is the new key ID for the for the next crypto
+  /// period.
   /// @param is_initial_encryption_info is true if this is the first encryption
   ///        info for the media. In general, this flag should always be true for
   ///        non-key-rotated media and should be called only once.
@@ -90,26 +107,11 @@ class MuxerListener {
   /// Called when all files are written out and the muxer object does not output
   /// any more files.
   /// Note: This event might not be very interesting to MPEG DASH Live profile.
-  /// @param has_init_range is true if @a init_range_start and @a init_range_end
-  ///        actually define an initialization range of a segment. The range is
-  ///        inclusive for both start and end.
-  /// @param init_range_start is the start of the initialization range.
-  /// @param init_range_end is the end of the initialization range.
-  /// @param has_index_range is true if @a index_range_start and @a
-  ///        index_range_end actually define an index range of a segment. The
-  ///        range is inclusive for both start and end.
-  /// @param index_range_start is the start of the index range.
-  /// @param index_range_end is the end of the index range.
+  /// @param media_ranges is the ranges of the media file. It should have ranges
+  ///        for the entire file, using which the file size can be calculated.
   /// @param duration_seconds is the length of the media in seconds.
-  /// @param file_size is the size of the file in bytes.
-  virtual void OnMediaEnd(bool has_init_range,
-                          uint64_t init_range_start,
-                          uint64_t init_range_end,
-                          bool has_index_range,
-                          uint64_t index_range_start,
-                          uint64_t index_range_end,
-                          float duration_seconds,
-                          uint64_t file_size) = 0;
+  virtual void OnMediaEnd(const MediaRanges& media_ranges,
+                          float duration_seconds) = 0;
 
   /// Called when a segment has been muxed and the file has been written.
   /// Note: For some implementations, this is used to signal new subsegments.
@@ -123,15 +125,29 @@ class MuxerListener {
   ///        specified by MediaInfo passed to OnMediaStart().
   /// @param segment_file_size is the segment size in bytes.
   virtual void OnNewSegment(const std::string& segment_name,
-                            uint64_t start_time,
-                            uint64_t duration,
+                            int64_t start_time,
+                            int64_t duration,
                             uint64_t segment_file_size) = 0;
 
+  /// Called when there is a new key frame. For Video only. Note that it should
+  /// be called before OnNewSegment is called on the containing segment.
+  /// @param timestamp is in terms of the timescale of the media.
+  /// @param start_byte_offset is the offset of where the key frame starts.
+  /// @param size is size in bytes.
+  virtual void OnKeyFrame(int64_t timestamp,
+                          uint64_t start_byte_offset,
+                          uint64_t size) = 0;
+
+  /// Called when there is a new Ad Cue, which should align with (sub)segments.
+  /// @param timestamp indicate the cue timestamp.
+  /// @param cue_data is the data of the cue.
+  virtual void OnCueEvent(int64_t timestamp, const std::string& cue_data) = 0;
+
  protected:
-  MuxerListener() {};
+  MuxerListener() = default;
 };
 
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_EVENT_MUXER_LISTENER_H_
+#endif  // PACKAGER_MEDIA_EVENT_MUXER_LISTENER_H_

@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef MEDIA_FORMATS_MP2T_ES_PARSER_H264_H_
-#define MEDIA_FORMATS_MP2T_ES_PARSER_H264_H_
+#ifndef PACKAGER_MEDIA_FORMATS_MP2T_ES_PARSER_H264_H_
+#define PACKAGER_MEDIA_FORMATS_MP2T_ES_PARSER_H264_H_
 
 #include <stdint.h>
 #include <memory>
@@ -33,11 +33,8 @@ class EsParserH264 : public EsParserH26x {
   void Reset() override;
 
  private:
-  // Processes a NAL unit found in ParseInternal.  The @a pps_id_for_access_unit
-  // value will be passed to UpdateVideoDecoderConfig.
-  bool ProcessNalu(const Nalu& nalu,
-                   bool* is_key_frame,
-                   int* pps_id_for_access_unit) override;
+  // Processes a NAL unit found in ParseInternal.
+  bool ProcessNalu(const Nalu& nalu, VideoSliceInfo* video_slice_info) override;
 
   // Update the video decoder config based on an H264 SPS.
   // Return true if successful.
@@ -46,7 +43,7 @@ class EsParserH264 : public EsParserH26x {
   // Callback to pass the stream configuration.
   NewStreamInfoCB new_stream_info_cb_;
 
-  scoped_refptr<StreamInfo> last_video_decoder_config_;
+  std::shared_ptr<StreamInfo> last_video_decoder_config_;
   bool decoder_config_check_pending_;
 
   std::unique_ptr<H264Parser> h264_parser_;

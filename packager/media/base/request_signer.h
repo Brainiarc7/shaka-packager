@@ -4,11 +4,12 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef MEDIA_BASE_REQUEST_SIGNER_H_
-#define MEDIA_BASE_REQUEST_SIGNER_H_
+#ifndef PACKAGER_MEDIA_BASE_REQUEST_SIGNER_H_
+#define PACKAGER_MEDIA_BASE_REQUEST_SIGNER_H_
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "packager/base/macros.h"
 
@@ -45,11 +46,11 @@ class AesRequestSigner : public RequestSigner {
  public:
   ~AesRequestSigner() override;
 
-  /// Create an AesSigner object from key and iv in hex.
+  /// Create an AesSigner object from key and iv.
   /// @return The created AesRequestSigner object on success, NULL otherwise.
   static AesRequestSigner* CreateSigner(const std::string& signer_name,
-                                        const std::string& aes_key_hex,
-                                        const std::string& iv_hex);
+                                        const std::vector<uint8_t>& aes_key,
+                                        const std::vector<uint8_t>& iv);
 
   /// RequestSigner implementation override.
   bool GenerateSignature(const std::string& message,
@@ -90,4 +91,4 @@ class RsaRequestSigner : public RequestSigner {
 }  // namespace media
 }  // namespace shaka
 
-#endif  // MEDIA_BASE_REQUEST_SIGNER_H_
+#endif  // PACKAGER_MEDIA_BASE_REQUEST_SIGNER_H_
