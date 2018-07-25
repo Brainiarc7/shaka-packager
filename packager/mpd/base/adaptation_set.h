@@ -17,7 +17,6 @@
 #include <set>
 #include <vector>
 
-#include "packager/base/atomic_sequence_num.h"
 #include "packager/base/optional.h"
 #include "packager/mpd/base/xml/scoped_xml_ptr.h"
 
@@ -178,7 +177,7 @@ class AdaptationSet {
   ///        Representation. It can not be NULL.
   AdaptationSet(const std::string& language,
                 const MpdOptions& mpd_options,
-                base::AtomicSequenceNumber* representation_counter);
+                uint32_t* representation_counter);
 
  private:
   AdaptationSet(const AdaptationSet&) = delete;
@@ -213,18 +212,19 @@ class AdaptationSet {
 
   /// Called from OnNewSegmentForRepresentation(). Checks whether the segments
   /// are aligned. Sets segments_aligned_.
-  /// This is only for Live. For VOD, CheckVodSegmentAlignment() should be used.
+  /// This is only for dynamic MPD. For static MPD,
+  /// CheckStaticSegmentAlignment() should be used.
   /// @param representation_id is the id of the Representation with a new
   ///        segment.
   /// @param start_time is the start time of the new segment.
   /// @param duration is the duration of the new segment.
-  void CheckLiveSegmentAlignment(uint32_t representation_id,
-                                 uint64_t start_time,
-                                 uint64_t duration);
+  void CheckDynamicSegmentAlignment(uint32_t representation_id,
+                                    uint64_t start_time,
+                                    uint64_t duration);
 
   // Checks representation_segment_start_times_ and sets segments_aligned_.
-  // Use this for VOD, do not use for Live.
-  void CheckVodSegmentAlignment();
+  // Use this for static MPD, do not use for dynamic MPD.
+  void CheckStaticSegmentAlignment();
 
   // Records the framerate of a Representation.
   void RecordFrameRate(uint32_t frame_duration, uint32_t timescale);
@@ -234,7 +234,7 @@ class AdaptationSet {
   // sorted by default.
   std::map<uint32_t, std::unique_ptr<Representation>> representation_map_;
 
-  base::AtomicSequenceNumber* const representation_counter_;
+  uint32_t* const representation_counter_;
 
   base::Optional<uint32_t> id_;
   const std::string language_;
@@ -279,12 +279,12 @@ class AdaptationSet {
   bool force_set_segment_alignment_;
 
   // Keeps track of segment start times of Representations.
-  // For VOD, this will not be cleared, all the segment start times are
+  // For static MPD, this will not be cleared, all the segment start times are
   // stored in this. This should not out-of-memory for a reasonable length
   // video and reasonable subsegment length.
-  // For Live, the entries are deleted (see CheckLiveSegmentAlignment()
-  // implementation comment) because storing the entire timeline is not
-  // reasonable and may cause an out-of-memory problem.
+  // For dynamic MPD, the entries are deleted (see
+  // CheckDynamicSegmentAlignment() implementation comment) because storing the
+  // entire timeline is not reasonable and may cause an out-of-memory problem.
   RepresentationTimeline representation_segment_start_times_;
 
   // Record the original AdaptationSets the trick play stream belongs to. There
