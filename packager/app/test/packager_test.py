@@ -721,6 +721,11 @@ class PackagerFunctionalTest(PackagerAppTest):
                               self._GetFlags(output_dash=True))
     self._CheckTestResults('video-audio-text')
 
+  def testVideoNoEditList(self):
+    stream = self._GetStream('video', test_file='bear-640x360-no_edit_list.mp4')
+    self.assertPackageSuccess([stream], self._GetFlags(output_dash=True))
+    self._CheckTestResults('video-no-edit-list')
+
   def testAvcAacTs(self):
     # Currently we only support live packaging for ts.
     self.assertPackageSuccess(
@@ -1481,7 +1486,8 @@ class PackagerFunctionalTest(PackagerAppTest):
     self._AssertStreamInfo(self.output[1], 'is_encrypted: true')
 
   def testHlsSegmentedWebVtt(self):
-    streams = self._GetStreams(['audio', 'video'], segmented=True)
+    streams = self._GetStreams(
+        ['audio', 'video'], output_format='ts', segmented=True)
     streams += self._GetStreams(
         ['text'], test_files=['bear-subtitle-english.vtt'], segmented=True)
 

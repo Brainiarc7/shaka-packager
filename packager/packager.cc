@@ -73,6 +73,8 @@ MuxerOptions CreateMuxerOptions(const StreamDescriptor& stream,
   MuxerOptions options;
 
   options.mp4_params = params.mp4_output_params;
+  options.transport_stream_timestamp_offset_ms =
+      params.transport_stream_timestamp_offset_ms;
   options.temp_dir = params.temp_dir;
   options.bandwidth = stream.bandwidth;
   options.output_file_name = stream.output;
@@ -315,15 +317,16 @@ Status ValidateParams(const PackagingParams& packaging_params,
 
 bool StreamDescriptorCompareFn(const StreamDescriptor& a,
                                const StreamDescriptor& b) {
+  // This function is used by std::sort() to sort the stream descriptors.
+  // Note that std::sort() need a comparator that return true iff the first
+  // argument is strictly lower than the second one. That is: must return false
+  // when they are equal. The requirement is enforced in gcc/g++ but not in
+  // clang.
   if (a.input == b.input) {
     if (a.stream_selector == b.stream_selector) {
       // The MPD notifier requires that the main track comes first, so make
       // sure that happens.
-      if (a.trick_play_factor == 0 || b.trick_play_factor == 0) {
-        return a.trick_play_factor == 0;
-      } else {
-        return a.trick_play_factor > b.trick_play_factor;
-      }
+      return a.trick_play_factor < b.trick_play_factor;
     } else {
       return a.stream_selector < b.stream_selector;
     }
@@ -747,6 +750,9 @@ Status CreateAllJobs(const std::vector<StreamDescriptor>& stream_descriptors,
   std::vector<std::reference_wrapper<const StreamDescriptor>>
       audio_video_streams;
 
+  bool has_transport_audio_video_streams = false;
+  bool has_non_transport_audio_video_streams = false;
+
   for (const StreamDescriptor& stream : stream_descriptors) {
     // TODO: Find a better way to determine what stream type a stream
     // descriptor is as |stream_selector| may use an index. This would
@@ -755,6 +761,18 @@ Status CreateAllJobs(const std::vector<StreamDescriptor>& stream_descriptors,
       text_streams.push_back(stream);
     } else {
       audio_video_streams.push_back(stream);
+
+      switch (GetOutputFormat(stream)) {
+        case CONTAINER_MPEG2TS:
+        case CONTAINER_AAC:
+        case CONTAINER_AC3:
+        case CONTAINER_EAC3:
+          has_transport_audio_video_streams = true;
+          break;
+        default:
+          has_non_transport_audio_video_streams = true;
+          break;
+      }
     }
   }
 
@@ -763,9 +781,26 @@ Status CreateAllJobs(const std::vector<StreamDescriptor>& stream_descriptors,
   std::sort(audio_video_streams.begin(), audio_video_streams.end(),
             media::StreamDescriptorCompareFn);
 
-  RETURN_IF_ERROR(CreateTextJobs(text_streams, packaging_params, sync_points,
-                                 muxer_listener_factory, muxer_factory,
-                                 mpd_notifier, job_manager));
+  if (!text_streams.empty()) {
+    PackagingParams text_packaging_params = packaging_params;
+    if (text_packaging_params.transport_stream_timestamp_offset_ms > 0) {
+      if (has_transport_audio_video_streams &&
+          has_non_transport_audio_video_streams) {
+        LOG(WARNING) << "There may be problems mixing transport streams and "
+                        "non-transport streams. For example, the subtitles may "
+                        "be out of sync with non-transport streams.";
+      } else if (has_non_transport_audio_video_streams) {
+        // Don't insert the X-TIMESTAMP-MAP in WebVTT if there is no transport
+        // stream.
+        text_packaging_params.transport_stream_timestamp_offset_ms = 0;
+      }
+    }
+
+    RETURN_IF_ERROR(CreateTextJobs(text_streams, text_packaging_params,
+                                   sync_points, muxer_listener_factory,
+                                   muxer_factory, mpd_notifier, job_manager));
+  }
+
   RETURN_IF_ERROR(CreateAudioVideoJobs(
       audio_video_streams, packaging_params, encryption_key_source, sync_points,
       muxer_listener_factory, muxer_factory, job_manager));

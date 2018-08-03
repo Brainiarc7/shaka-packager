@@ -9,10 +9,10 @@
 #include "packager/app/muxer_flags.h"
 
 DEFINE_double(clear_lead,
-              10.0f,
+              12.0f,
               "Clear lead in seconds if encryption is enabled.");
 DEFINE_double(segment_duration,
-              10.0f,
+              6.0f,
               "Segment duration in seconds. If single_segment is specified, "
               "this parameter sets the duration of a subsegment; otherwise, "
               "this parameter sets the duration of a segment. Actual segment "
@@ -21,7 +21,7 @@ DEFINE_bool(segment_sap_aligned,
             true,
             "Force segments to begin with stream access points.");
 DEFINE_double(fragment_duration,
-              10.0f,
+              0,
               "Fragment duration in seconds. Should not be larger than "
               "the segment duration. Actual fragment durations may not be "
               "exactly as requested.");
@@ -41,3 +41,10 @@ DEFINE_string(temp_dir,
 DEFINE_bool(mp4_include_pssh_in_stream,
             true,
             "MP4 only: include pssh in the encrypted stream.");
+DEFINE_int32(transport_stream_timestamp_offset_ms,
+             100,
+             "A positive value, in milliseconds, by which output timestamps "
+             "are offset to compensate for possible negative timestamps in the "
+             "input. For example, timestamps from ISO-BMFF after adjusted by "
+             "EditList could be negative. In transport streams, timestamps are "
+             "not allowed to be less than zero.");
