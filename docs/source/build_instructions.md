@@ -232,6 +232,31 @@ $ ninja -C out/Release
 
 ## Notes for other linux distros
 
+### Alpine Linux
+
+Use `apk` command to install dependencies:
+
+```shell
+$ apk add --no-cache bash build-base curl findutils git ninja python \
+                     bsd-compat-headers linux-headers libexecinfo-dev
+```
+
+Alpine uses musl which does not have mallinfo defined in malloc.h. It is
+required by one of Shaka Packager's dependency. To workaround the problem, a
+dummy structure has to be defined in /usr/include/malloc.h, e.g.
+
+```shell
+$ sed -i \
+  '/malloc_usable_size/a \\nstruct mallinfo {\n  int arena;\n  int hblkhd;\n  int uordblks;\n};' \
+  /usr/include/malloc.h
+```
+
+We also need to disable clang and some other features to make it work with musl:
+
+```shell
+export GYP_DEFINES='clang=0 use_experimental_allocator_shim=0 use_allocator=none musl=1'
+```
+
 ### Arch Linux
 
 Instead of running `sudo apt-get install` to install build dependencies, run:
@@ -249,6 +274,12 @@ $ git clone https://aur.archlinux.org/ncurses5-compat-libs.git
 $ cd ncurses5-compat-libs
 $ gpg --keyserver pgp.mit.edu --recv-keys F7E48EDB
 $ makepkg -si
+```
+
+Optionally, disable clang to build with gcc:
+
+```shell
+$ export GYP_DEFINES='clang=0'
 ```
 
 ### Debian
@@ -276,12 +307,12 @@ sudo zypper in git python python-xml git curl gcc-c++ tar
 
 ### Xcode license agreement
 
-If you're getting the error
+If you are getting the error
 
 > Agreeing to the Xcode/iOS license requires admin privileges, please re-run as
 > root via sudo.
 
-the Xcode license hasn't been accepted yet which (contrary to the message) any
+the Xcode license has not been accepted yet which (contrary to the message) any
 user can do by running:
 
 ```shell
@@ -292,6 +323,19 @@ Only accepting for all users of the machine requires root:
 
 ```shell
 $ sudo xcodebuild -license
+```
+
+### Missing curl CA bundle
+
+If you are getting the error
+
+> gyp: Call to 'config/mac/find_curl_ca_bundle.sh' returned exit status 1 ...
+
+curl CA bundle is not able to be located. Installing curl with openssl should
+resolve the issue:
+
+```shell
+$ brew install curl --with-openssl
 ```
 
 ## Contributing

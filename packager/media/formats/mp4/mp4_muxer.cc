@@ -44,6 +44,8 @@ void SetStartAndEndFromOffsetAndSize(size_t offset,
 
 FourCC CodecToFourCC(Codec codec, H26xStreamFormat h26x_stream_format) {
   switch (codec) {
+    case kCodecAV1:
+      return FOURCC_av01;
     case kCodecH264:
       return h26x_stream_format ==
                      H26xStreamFormat::kNalUnitStreamWithParameterSetNalus
@@ -58,8 +60,6 @@ FourCC CodecToFourCC(Codec codec, H26xStreamFormat h26x_stream_format) {
       return FOURCC_vp08;
     case kCodecVP9:
       return FOURCC_vp09;
-    case kCodecVP10:
-      return FOURCC_vp10;
     case kCodecAAC:
       return FOURCC_mp4a;
     case kCodecAC3:
@@ -114,11 +114,6 @@ void GenerateSinf(FourCC old_type,
       break;
     case FOURCC_cbcs:
     case FOURCC_cens:
-      if (track_encryption.default_skip_byte_block == 0) {
-        // Some clients, e.g. Safari v11.0.3 does not like having
-        // crypt_byte_block as a non-zero value when skip_byte_block is zero.
-        track_encryption.default_crypt_byte_block = 0;
-      }
       // CENCv3 10.3 ‘cens’ AES-CTR subsample pattern encryption scheme and
       //        10.4 ‘cbcs’ AES-CBC subsample pattern encryption scheme:
       // The version of the Track Encryption Box (‘tenc’) SHALL be 1.
@@ -133,6 +128,16 @@ void GenerateSinf(FourCC old_type,
       encryption_config.per_sample_iv_size;
   track_encryption.default_constant_iv = encryption_config.constant_iv;
   track_encryption.default_kid = encryption_config.key_id;
+}
+
+// The roll distance is expressed in sample units and always takes negative
+// values.
+int16_t GetRollDistance(uint64_t seek_preroll_ns, uint32_t sampling_frequency) {
+  const double kNanosecondsPerSecond = 1000000000;
+  const double preroll_in_samples =
+      seek_preroll_ns / kNanosecondsPerSecond * sampling_frequency;
+  // Round to closest integer.
+  return -static_cast<int16_t>(preroll_in_samples + 0.5);
 }
 
 }  // namespace
@@ -497,34 +502,16 @@ bool MP4Muxer::GenerateAudioTrak(const AudioStreamInfo* audio_info,
     entry.format = FOURCC_enca;
   }
 
-  // Opus requires at least one sample group description box and at least one
-  // sample to group box with grouping type 'roll' within sample table box.
-  if (audio_info->codec() == kCodecOpus) {
+  if (audio_info->seek_preroll_ns() > 0) {
     sample_table.sample_group_descriptions.resize(1);
     SampleGroupDescription& sample_group_description =
         sample_table.sample_group_descriptions.back();
     sample_group_description.grouping_type = FOURCC_roll;
     sample_group_description.audio_roll_recovery_entries.resize(1);
-    // The roll distance is expressed in sample units and always takes negative
-    // values.
-    const uint64_t kNanosecondsPerSecond = 1000000000ull;
     sample_group_description.audio_roll_recovery_entries[0].roll_distance =
-        (0 - (audio_info->seek_preroll_ns() * audio.samplerate +
-              kNanosecondsPerSecond / 2)) /
-        kNanosecondsPerSecond;
-
-    sample_table.sample_to_groups.resize(1);
-    SampleToGroup& sample_to_group = sample_table.sample_to_groups.back();
-    sample_to_group.grouping_type = FOURCC_roll;
-
-    sample_to_group.entries.resize(1);
-    SampleToGroupEntry& sample_to_group_entry = sample_to_group.entries.back();
-    // All samples are in track fragments.
-    sample_to_group_entry.sample_count = 0;
-    sample_to_group_entry.group_description_index =
-        SampleToGroupEntry::kTrackGroupDescriptionIndexBase + 1;
-  } else if (audio_info->seek_preroll_ns() != 0) {
-    LOG(WARNING) << "Unexpected seek preroll for codec " << audio_info->codec();
+        GetRollDistance(audio_info->seek_preroll_ns(), audio.samplerate);
+    // sample to group box is not allowed in the init segment per CMAF
+    // specification. It is put in the fragment instead.
   }
   return true;
 }
@@ -538,8 +525,19 @@ bool MP4Muxer::GenerateTextTrak(const TextStreamInfo* text_info,
     // Handle WebVTT.
     TextSampleEntry webvtt;
     webvtt.format = FOURCC_wvtt;
-    webvtt.config.config.assign(text_info->codec_config().begin(),
-                                text_info->codec_config().end());
+
+    // 14496-30:2014 7.5 Web Video Text Tracks Sample entry format.
+    // In the sample entry, a WebVTT configuration box must occur, carrying
+    // exactly the lines of the WebVTT file header, i.e. all text lines up to
+    // but excluding the 'two or more line terminators' that end the header.
+    webvtt.config.config = "WEBVTT";
+    // The spec does not define a way to carry STYLE and REGION information in
+    // the mp4 container.
+    if (!text_info->codec_config().empty()) {
+      LOG(INFO) << "Skipping possible style / region configuration as the spec "
+                   "does not define a way to carry them inside ISO-BMFF files.";
+    }
+
     // TODO(rkuroiwa): This should be the source file URI(s). Putting bogus
     // string for now so that the box will be there for samples with overlapping
     // cues.

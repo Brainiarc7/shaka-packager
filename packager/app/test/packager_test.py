@@ -441,12 +441,10 @@ class PackagerAppTest(unittest.TestCase):
         flags.append('--iv=' + self.encryption_iv)
 
       if fairplay:
-        fairplay_pssh = ('000000207073736800000000'
-                         '29701FE43CC74A348C5BAE90C7439A4700000000')
         fairplay_key_uri = ('skd://www.license.com/'
                             'getkey?KeyId=31323334-3536-3738-3930-313233343536')
         flags += [
-            '--pssh=' + fairplay_pssh, '--hls_key_uri=' + fairplay_key_uri
+            '--protection_systems=FairPlay', '--hls_key_uri=' + fairplay_key_uri
         ]
     if protection_scheme:
       flags += ['--protection_scheme', protection_scheme]
@@ -851,6 +849,33 @@ class PackagerFunctionalTest(PackagerAppTest):
         self._GetFlags(output_dash=True))
     self._CheckTestResults('vorbis-webm')
 
+  def testAv1Mp4(self):
+    self.assertPackageSuccess(
+        self._GetStreams(['video'],
+                         output_format='mp4',
+                         test_files=['bear-av1.mp4']),
+        self._GetFlags(output_dash=True, output_hls=True)
+    )
+    self._CheckTestResults('av1-mp4')
+
+  def testAv1Mp4ToWebM(self):
+    self.assertPackageSuccess(
+        self._GetStreams(['video'],
+                         output_format='webm',
+                         test_files=['bear-av1.mp4']),
+        self._GetFlags(output_dash=True, output_hls=True)
+    )
+    self._CheckTestResults('av1-mp4-to-webm')
+
+  def testAv1WebM(self):
+    self.assertPackageSuccess(
+        self._GetStreams(['video'],
+                         output_format='mp4',
+                         test_files=['bear-av1.webm']),
+        self._GetFlags(output_dash=True, output_hls=True)
+    )
+    self._CheckTestResults('av1-webm')
+
   def testEncryption(self):
     self.assertPackageSuccess(
         self._GetStreams(['audio', 'video']),
@@ -1096,7 +1121,7 @@ class PackagerFunctionalTest(PackagerAppTest):
     self.assertPackageSuccess(streams, flags)
     self._CheckTestResults('avc-ts-aac-packed-audio-with-encryption')
 
-  def testAvcTsWithEncryptionAndFairplay(self):
+  def testAvcTsWithEncryptionAndFairPlay(self):
     # Currently we only support live packaging for ts.
     self.assertPackageSuccess(
         self._GetStreams(
@@ -1410,6 +1435,16 @@ class PackagerFunctionalTest(PackagerAppTest):
         self._GetStreams(['audio', 'video'], segmented=True),
         self._GetFlags(encryption=True, key_rotation=True, output_dash=True))
     self._CheckTestResults('live-profile-and-key-rotation')
+
+  def testLiveProfileAndKeyRotationCbcs(self):
+    self.assertPackageSuccess(
+        self._GetStreams(['audio', 'video'], segmented=True),
+        self._GetFlags(
+            encryption=True,
+            protection_scheme='cbcs',
+            key_rotation=True,
+            output_dash=True))
+    self._CheckTestResults('live-profile-and-key-rotation-cbcs')
 
   def testLiveProfileAndKeyRotationAndNoPsshInStream(self):
     self.assertPackageSuccess(

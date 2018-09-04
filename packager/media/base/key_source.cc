@@ -7,18 +7,16 @@
 #include "packager/media/base/key_source.h"
 
 #include "packager/base/logging.h"
+#include "packager/media/base/fairplay_pssh_generator.h"
 #include "packager/media/base/playready_pssh_generator.h"
 #include "packager/media/base/raw_key_pssh_generator.h"
 #include "packager/media/base/widevine_pssh_generator.h"
+#include "packager/status_macros.h"
 
 namespace shaka {
 namespace media {
 
-EncryptionKey::EncryptionKey() {}
-
-EncryptionKey::~EncryptionKey() {}
-
-KeySource::KeySource(int protection_systems_flags) {
+KeySource::KeySource(int protection_systems_flags, FourCC protection_scheme) {
   if (protection_systems_flags & COMMON_PROTECTION_SYSTEM_FLAG) {
     pssh_generators_.emplace_back(new RawKeyPsshGenerator());
   }
@@ -28,11 +26,15 @@ KeySource::KeySource(int protection_systems_flags) {
   }
 
   if (protection_systems_flags & WIDEVINE_PROTECTION_SYSTEM_FLAG) {
-    pssh_generators_.emplace_back(new WidevinePsshGenerator());
+    pssh_generators_.emplace_back(new WidevinePsshGenerator(protection_scheme));
+  }
+
+  if (protection_systems_flags & FAIRPLAY_PROTECTION_SYSTEM_FLAG) {
+    pssh_generators_.emplace_back(new FairPlayPsshGenerator());
   }
 }
 
-KeySource::~KeySource() {}
+KeySource::~KeySource() = default;
 
 Status KeySource::UpdateProtectionSystemInfo(
     EncryptionKeyMap* encryption_key_map) {
@@ -44,21 +46,15 @@ Status KeySource::UpdateProtectionSystemInfo(
       for (const EncryptionKeyMap::value_type& pair : *encryption_key_map) {
         key_ids.push_back(pair.second->key_id);
       }
-      Status status = pssh_generator->GeneratePsshFromKeyIds(key_ids, &info);
-      if (!status.ok()) {
-        return status;
-      }
+      RETURN_IF_ERROR(pssh_generator->GeneratePsshFromKeyIds(key_ids, &info));
       for (const EncryptionKeyMap::value_type& pair : *encryption_key_map) {
         pair.second->key_system_info.push_back(info);
       }
     } else {
       for (const EncryptionKeyMap::value_type& pair : *encryption_key_map) {
         ProtectionSystemSpecificInfo info;
-        Status status = pssh_generator->GeneratePsshFromKeyIdAndKey(
-            pair.second->key_id, pair.second->key, &info);
-        if (!status.ok()) {
-          return status;
-        }
+        RETURN_IF_ERROR(pssh_generator->GeneratePsshFromKeyIdAndKey(
+            pair.second->key_id, pair.second->key, &info));
         pair.second->key_system_info.push_back(info);
       }
     }

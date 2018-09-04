@@ -60,50 +60,10 @@ TEST_F(AesPatternCryptorTest, InitializeWithIv) {
   EXPECT_EQ(iv, pattern_cryptor_.iv());
 }
 
-namespace {
-
 struct PatternTestCase {
   const char* text_hex;
   const char* expected_crypt_text_hex;
 };
-
-const PatternTestCase kPatternTestCases[] = {
-    // Empty.
-    {"", ""},
-    // One partial block (not encrypted).
-    {"010203", "010203"},
-    // One block (not encrypted).
-    {"01020304050607080910111213141516", "01020304050607080910111213141516"},
-    // One block + partial block (not encrypted).
-    {"010203040506070809101112131415161718",
-     "010203040506070809101112131415161718"},
-    // Two blocks (encrypted) - the mock encryptor adds every byte by 0x10.
-    {"0102030405060708091011121314151617181920212223242526272829303132",
-     "1112131415161718192021222324252627282930313233343536373839404142"},
-    // Two blocks + partial block (only the first two blocks are encrypted).
-    {"0102030405060708091011121314151617181920212223242526272829303132"
-     "333435363738",
-     "1112131415161718192021222324252627282930313233343536373839404142"
-     "333435363738"},
-    // Seven blocks.
-    {// kCryptByteBlock (2) blocks encrypted.
-     "0102030405060708091011121314151617181920212223242526272829303132"
-     // kSkipByteBlock (1) block not encrypted.
-     "33343536373839404142434445464748"
-     // kCryptByteBlock (2) blocks encrypted.
-     "4950515253545556575859606162636465666768697071727374757677787980"
-     // kSkipByteBlock (1) block not encrypted.
-     "81828384858687888990919293949596"
-     // Less than kCryptByteBlock blocks remaining, so not encrypted.
-     "97989900010203040506070809101112",
-     "1112131415161718192021222324252627282930313233343536373839404142"
-     "33343536373839404142434445464748"
-     "5960616263646566676869707172737475767778798081828384858687888990"
-     "81828384858687888990919293949596"
-     "97989900010203040506070809101112"},
-};
-
-}  // namespace
 
 class AesPatternCryptorVerificationTest
     : public AesPatternCryptorTest,
@@ -136,6 +96,48 @@ TEST_P(AesPatternCryptorVerificationTest, PatternTest) {
   ASSERT_TRUE(pattern_cryptor_.Crypt(text, &crypt_text));
   EXPECT_EQ(expected_crypt_text, crypt_text);
 }
+
+namespace {
+const PatternTestCase kPatternTestCases[] = {
+    // Empty.
+    {"", ""},
+    // One partial block (not encrypted).
+    {"010203", "010203"},
+    // One block (encrypted).
+    {"01020304050607080910111213141516", "11121314151617181920212223242526"},
+    // One block + partial block.
+    {// One block encrypted.
+     "01020304050607080910111213141516"
+     // Partial block unencrypted.
+     "1718",
+     "11121314151617181920212223242526"
+     "1718"},
+    // Two blocks (encrypted) - the mock encryptor adds every byte by 0x10.
+    {"0102030405060708091011121314151617181920212223242526272829303132",
+     "1112131415161718192021222324252627282930313233343536373839404142"},
+    // Two blocks + partial block (only the first two blocks are encrypted).
+    {"0102030405060708091011121314151617181920212223242526272829303132"
+     "333435363738",
+     "1112131415161718192021222324252627282930313233343536373839404142"
+     "333435363738"},
+    // Seven blocks.
+    {// kCryptByteBlock (2) blocks encrypted.
+     "0102030405060708091011121314151617181920212223242526272829303132"
+     // kSkipByteBlock (1) block not encrypted.
+     "33343536373839404142434445464748"
+     // kCryptByteBlock (2) blocks encrypted.
+     "4950515253545556575859606162636465666768697071727374757677787980"
+     // kSkipByteBlock (1) block not encrypted.
+     "81828384858687888990919293949596"
+     // One full block remaining, encrypted.
+     "97989900010203040506070809101112",
+     "1112131415161718192021222324252627282930313233343536373839404142"
+     "33343536373839404142434445464748"
+     "5960616263646566676869707172737475767778798081828384858687888990"
+     "81828384858687888990919293949596"
+     "a7a8a910111213141516171819202122"},
+};
+}  // namespace
 
 INSTANTIATE_TEST_CASE_P(PatternTestCases,
                         AesPatternCryptorVerificationTest,

@@ -7,6 +7,7 @@
 #include "packager/media/base/playready_key_source.h"
 
 #include <algorithm>
+
 #include "packager/base/base64.h"
 #include "packager/base/logging.h"
 #include "packager/base/strings/string_number_conversions.h"
@@ -15,6 +16,7 @@
 #include "packager/media/base/http_key_fetcher.h"
 #include "packager/media/base/key_source.h"
 #include "packager/media/base/playready_pssh_generator.h"
+#include "packager/status_macros.h"
 
 namespace shaka {
 namespace media {
@@ -61,9 +63,16 @@ bool Base64StringToBytes(const std::string& base64_string,
 }
 
 PlayReadyKeySource::PlayReadyKeySource(const std::string& server_url,
-                                       int protection_system_flags)
+                                       int protection_system_flags,
+                                       FourCC protection_scheme)
     // PlayReady PSSH is retrived from PlayReady server response.
-    : KeySource(protection_system_flags & ~PLAYREADY_PROTECTION_SYSTEM_FLAG),
+    : KeySource(protection_system_flags & ~PLAYREADY_PROTECTION_SYSTEM_FLAG,
+                protection_scheme),
+      generate_playready_protection_system_(
+          // Generate PlayReady protection system if there are no other
+          // protection system specified.
+          protection_system_flags == NO_PROTECTION_SYSTEM_FLAG ||
+          protection_system_flags & PLAYREADY_PROTECTION_SYSTEM_FLAG),
       encryption_key_(new EncryptionKey),
       server_url_(server_url) {}
 
@@ -72,21 +81,18 @@ PlayReadyKeySource::PlayReadyKeySource(
     const std::string& client_cert_file,
     const std::string& client_cert_private_key_file,
     const std::string& client_cert_private_key_password,
-    int protection_system_flags)
+    int protection_system_flags,
+    FourCC protection_scheme)
     // PlayReady PSSH is retrived from PlayReady server response.
-    : KeySource(protection_system_flags & ~PLAYREADY_PROTECTION_SYSTEM_FLAG),
+    : KeySource(protection_system_flags & ~PLAYREADY_PROTECTION_SYSTEM_FLAG,
+                protection_scheme),
       encryption_key_(new EncryptionKey),
       server_url_(server_url),
       client_cert_file_(client_cert_file),
       client_cert_private_key_file_(client_cert_private_key_file),
       client_cert_private_key_password_(client_cert_private_key_password) {}
 
-PlayReadyKeySource::PlayReadyKeySource(
-    std::unique_ptr<EncryptionKey> encryption_key)
-    : KeySource(PLAYREADY_PROTECTION_SYSTEM_FLAG),
-      encryption_key_(std::move(encryption_key)) {}
-
-PlayReadyKeySource::~PlayReadyKeySource() {}
+PlayReadyKeySource::~PlayReadyKeySource() = default;
 
 Status RetrieveTextInXMLElement(const std::string& element,
                                 const std::string& xml,
@@ -112,52 +118,47 @@ Status RetrieveTextInXMLElement(const std::string& element,
   return Status::OK;
 }
 
-Status SetKeyInformationFromServerResponse(const std::string& response,
-                                           EncryptionKey* encryption_key) {
+Status SetKeyInformationFromServerResponse(
+    const std::string& response,
+    bool generate_playready_protection_system,
+    EncryptionKey* encryption_key) {
   // TODO(robinconnell): Currently all tracks are encrypted using the same
   // key_id and key.  Add the ability to retrieve multiple key_id/keys from
   // the packager response and encrypt multiple tracks using differnt
   // key_id/keys.
   std::string key_id_hex;
-  Status status = RetrieveTextInXMLElement("KeyId", response, &key_id_hex);
-  if (!status.ok()) {
-    return status;
-  }
+  RETURN_IF_ERROR(RetrieveTextInXMLElement("KeyId", response, &key_id_hex));
   key_id_hex.erase(
       std::remove(key_id_hex.begin(), key_id_hex.end(), '-'), key_id_hex.end());
-  std::string key_data_b64;
-  status = RetrieveTextInXMLElement("KeyData", response, &key_data_b64);
-  if (!status.ok()) {
-    LOG(ERROR) << "Key retreiving KeyData";
-    return status;
-  }
-  std::string pssh_data_b64;
-  status = RetrieveTextInXMLElement("Data", response, &pssh_data_b64);
-  if (!status.ok()) {
-    LOG(ERROR) << "Key retreiving Data";
-    return status;
-  }
   if (!base::HexStringToBytes(key_id_hex, &encryption_key->key_id)) {
     LOG(ERROR) << "Cannot parse key_id_hex, " << key_id_hex;
     return Status(error::SERVER_ERROR, "Cannot parse key_id_hex.");
   }
 
+  std::string key_data_b64;
+  RETURN_IF_ERROR(RetrieveTextInXMLElement("KeyData", response, &key_data_b64));
   if (!Base64StringToBytes(key_data_b64, &encryption_key->key)) {
     LOG(ERROR) << "Cannot parse key, " << key_data_b64;
     return Status(error::SERVER_ERROR, "Cannot parse key.");
   }
-  std::vector<uint8_t> pssh_data;
-  if (!Base64StringToBytes(pssh_data_b64, &pssh_data)) {
-    LOG(ERROR) << "Cannot parse pssh data, " << pssh_data_b64;
-    return Status(error::SERVER_ERROR, "Cannot parse pssh.");
-  }
 
-  PsshBoxBuilder pssh_builder;
-  pssh_builder.add_key_id(encryption_key->key_id);
-  pssh_builder.set_system_id(kPlayReadySystemId, arraysize(kPlayReadySystemId));
-  pssh_builder.set_pssh_data(pssh_data);
-  encryption_key->key_system_info.push_back(
-      {pssh_builder.system_id(), pssh_builder.CreateBox()});
+  if (generate_playready_protection_system) {
+    std::string pssh_data_b64;
+    RETURN_IF_ERROR(RetrieveTextInXMLElement("Data", response, &pssh_data_b64));
+    std::vector<uint8_t> pssh_data;
+    if (!Base64StringToBytes(pssh_data_b64, &pssh_data)) {
+      LOG(ERROR) << "Cannot parse pssh data, " << pssh_data_b64;
+      return Status(error::SERVER_ERROR, "Cannot parse pssh.");
+    }
+
+    PsshBoxBuilder pssh_builder;
+    pssh_builder.add_key_id(encryption_key->key_id);
+    pssh_builder.set_system_id(kPlayReadySystemId,
+                               arraysize(kPlayReadySystemId));
+    pssh_builder.set_pssh_data(pssh_data);
+    encryption_key->key_system_info.push_back(
+        {pssh_builder.system_id(), pssh_builder.CreateBox()});
+  }
   return Status::OK;
 }
 
@@ -173,33 +174,32 @@ Status PlayReadyKeySource::FetchKeysWithProgramIdentifier(
   if (!ca_file_.empty()) {
     key_fetcher.SetCaFile(ca_file_);
   }
+
   std::string acquire_license_request = kAcquireLicenseRequest;
   base::ReplaceFirstSubstringAfterOffset(
       &acquire_license_request, 0, "$0", program_identifier);
   std::string acquire_license_response;
   Status status = key_fetcher.FetchKeys(server_url_, acquire_license_request,
                                         &acquire_license_response);
-  if (!status.ok()) {
-    LOG(ERROR) << "Server response: " << acquire_license_response;
-    return status;
-  }
-  status = SetKeyInformationFromServerResponse(acquire_license_response,
-                                               encryption_key.get());
-  // Playready does not specify different streams.
+  VLOG(1) << "Server response: " << acquire_license_response;
+  RETURN_IF_ERROR(status);
+
+  RETURN_IF_ERROR(SetKeyInformationFromServerResponse(
+      acquire_license_response, generate_playready_protection_system_,
+      encryption_key.get()));
+
+  // PlayReady does not specify different streams.
   const char kEmptyDrmLabel[] = "";
   EncryptionKeyMap encryption_key_map;
   encryption_key_map[kEmptyDrmLabel] = std::move(encryption_key);
-  status = UpdateProtectionSystemInfo(&encryption_key_map);
-  if (!status.ok()) {
-    return status;
-  }
+  RETURN_IF_ERROR(UpdateProtectionSystemInfo(&encryption_key_map));
   encryption_key_ = std::move(encryption_key_map[kEmptyDrmLabel]);
   return Status::OK;
 }
 
 Status PlayReadyKeySource::FetchKeys(EmeInitDataType init_data_type,
                                      const std::vector<uint8_t>& init_data) {
-  // Do nothing for playready encryption/decryption.
+  // Do nothing for PlayReady encryption/decryption.
   return Status::OK;
 }
 

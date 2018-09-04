@@ -5,7 +5,9 @@ Widevine encryption options
 
     Enable encryption with Widevine key server. User should provide either
     AES signing key (--aes_signing_key, --aes_signing_iv) or RSA signing key
-    (--rsa_signing_key_path).
+    (--rsa_signing_key_path). This generates Widevine protection system if
+    --protection_systems is not specified. Use --protection_systems to generate
+    multiple protection systems.
 
 --enable_widevine_decryption
 

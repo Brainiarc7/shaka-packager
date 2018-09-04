@@ -44,18 +44,35 @@ std::unique_ptr<RequestSigner> CreateSigner(const WidevineSigner& signer) {
   return request_signer;
 }
 
+int GetProtectionSystemsFlag(
+    const std::vector<EncryptionParams::ProtectionSystem>& protection_systems) {
+  int protection_systems_flags = 0;
+  for (const auto protection_system : protection_systems) {
+    switch (protection_system) {
+      case EncryptionParams::ProtectionSystem::kCommonSystem:
+        protection_systems_flags |= COMMON_PROTECTION_SYSTEM_FLAG;
+        break;
+      case EncryptionParams::ProtectionSystem::kFairPlay:
+        protection_systems_flags |= FAIRPLAY_PROTECTION_SYSTEM_FLAG;
+        break;
+      case EncryptionParams::ProtectionSystem::kPlayReady:
+        protection_systems_flags |= PLAYREADY_PROTECTION_SYSTEM_FLAG;
+        break;
+      case EncryptionParams::ProtectionSystem::kWidevine:
+        protection_systems_flags |= WIDEVINE_PROTECTION_SYSTEM_FLAG;
+        break;
+    }
+  }
+  return protection_systems_flags;
+}
+
 }  // namespace
 
 std::unique_ptr<KeySource> CreateEncryptionKeySource(
     FourCC protection_scheme,
     const EncryptionParams& encryption_params) {
-  int protection_systems_flags(0);
-  if (encryption_params.generate_common_pssh)
-    protection_systems_flags |= COMMON_PROTECTION_SYSTEM_FLAG;
-  if (encryption_params.generate_playready_pssh)
-    protection_systems_flags |= PLAYREADY_PROTECTION_SYSTEM_FLAG;
-  if (encryption_params.generate_widevine_pssh)
-    protection_systems_flags |= WIDEVINE_PROTECTION_SYSTEM_FLAG;
+  int protection_systems_flags =
+      GetProtectionSystemsFlag(encryption_params.protection_systems);
 
   std::unique_ptr<KeySource> encryption_key_source;
   switch (encryption_params.key_provider) {
@@ -71,8 +88,7 @@ std::unique_ptr<KeySource> CreateEncryptionKeySource(
       }
       std::unique_ptr<WidevineKeySource> widevine_key_source(
           new WidevineKeySource(widevine.key_server_url,
-                                protection_systems_flags));
-      widevine_key_source->set_protection_scheme(protection_scheme);
+                                protection_systems_flags, protection_scheme));
       if (!widevine.signer.signer_name.empty()) {
         std::unique_ptr<RequestSigner> request_signer(
             CreateSigner(widevine.signer));
@@ -95,8 +111,9 @@ std::unique_ptr<KeySource> CreateEncryptionKeySource(
       break;
     }
     case KeyProvider::kRawKey: {
-      encryption_key_source = RawKeySource::Create(encryption_params.raw_key,
-                                                   protection_systems_flags);
+      encryption_key_source =
+          RawKeySource::Create(encryption_params.raw_key,
+                               protection_systems_flags, protection_scheme);
       break;
     }
     case KeyProvider::kPlayReady: {
@@ -105,7 +122,7 @@ std::unique_ptr<KeySource> CreateEncryptionKeySource(
           !playready.program_identifier.empty()) {
         if (playready.key_server_url.empty() ||
             playready.program_identifier.empty()) {
-          LOG(ERROR) << "Either playready key_server_url or program_identifier "
+          LOG(ERROR) << "Either PlayReady key_server_url or program_identifier "
                         "is not set.";
           return nullptr;
         }
@@ -115,7 +132,7 @@ std::unique_ptr<KeySource> CreateEncryptionKeySource(
             !playready.client_cert_private_key_file.empty()) {
           if (playready.client_cert_file.empty() ||
               playready.client_cert_private_key_file.empty()) {
-            LOG(ERROR) << "Either playready client_cert_file or "
+            LOG(ERROR) << "Either PlayReady client_cert_file or "
                           "client_cert_private_key_file is not set.";
             return nullptr;
           }
@@ -123,16 +140,22 @@ std::unique_ptr<KeySource> CreateEncryptionKeySource(
               playready.key_server_url, playready.client_cert_file,
               playready.client_cert_private_key_file,
               playready.client_cert_private_key_password,
-              protection_systems_flags));
+              protection_systems_flags, protection_scheme));
         } else {
           playready_key_source.reset(new PlayReadyKeySource(
-              playready.key_server_url, protection_systems_flags));
+              playready.key_server_url, protection_systems_flags,
+              protection_scheme));
         }
         if (!playready.ca_file.empty()) {
           playready_key_source->SetCaFile(playready.ca_file);
         }
-        playready_key_source->FetchKeysWithProgramIdentifier(
+        Status status = playready_key_source->FetchKeysWithProgramIdentifier(
             playready.program_identifier);
+        if (!status.ok()) {
+          LOG(ERROR) << "PlayReady encryption key source failed to fetch keys: "
+                     << status.ToString();
+          return nullptr;
+        }
         encryption_key_source = std::move(playready_key_source);
       } else {
         LOG(ERROR) << "Error creating PlayReady key source.";
@@ -156,9 +179,11 @@ std::unique_ptr<KeySource> CreateDecryptionKeySource(
         LOG(ERROR) << "'key_server_url' should not be empty.";
         return std::unique_ptr<KeySource>();
       }
-      std::unique_ptr<WidevineKeySource> widevine_key_source(new WidevineKeySource(
-          widevine.key_server_url,
-          WIDEVINE_PROTECTION_SYSTEM_FLAG /* value does not matter here */));
+      std::unique_ptr<WidevineKeySource> widevine_key_source(
+          new WidevineKeySource(
+              widevine.key_server_url,
+              WIDEVINE_PROTECTION_SYSTEM_FLAG /* value does not matter here */,
+              FOURCC_NULL /* value does not matter here */));
       if (!widevine.signer.signer_name.empty()) {
         std::unique_ptr<RequestSigner> request_signer(
             CreateSigner(widevine.signer));
@@ -173,7 +198,8 @@ std::unique_ptr<KeySource> CreateDecryptionKeySource(
     case KeyProvider::kRawKey: {
       decryption_key_source = RawKeySource::Create(
           decryption_params.raw_key,
-          COMMON_PROTECTION_SYSTEM_FLAG /* value does not matter here*/);
+          COMMON_PROTECTION_SYSTEM_FLAG /* value does not matter here */,
+          FOURCC_NULL /* value does not matter here */);
       break;
     }
     case KeyProvider::kNone:

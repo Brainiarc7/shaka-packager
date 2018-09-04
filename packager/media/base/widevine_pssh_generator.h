@@ -7,11 +7,8 @@
 #ifndef MEDIA_BASE_WIDEVINE_PSSH_GENERATOR_H_
 #define MEDIA_BASE_WIDEVINE_PSSH_GENERATOR_H_
 
-#include <vector>
-
-#include "packager/media/base/key_source.h"
-#include "packager/media/base/protection_system_specific_info.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
+#include "packager/media/base/fourccs.h"
+#include "packager/media/base/pssh_generator.h"
 
 namespace shaka {
 namespace media {
@@ -19,11 +16,10 @@ namespace media {
 const uint8_t kWidevineSystemId[] = {0xed, 0xef, 0x8b, 0xa9, 0x79, 0xd6,
                                      0x4a, 0xce, 0xa3, 0xc8, 0x27, 0xdc,
                                      0xd5, 0x1d, 0x21, 0xed};
-class WidevineKeySource;
 
 class WidevinePsshGenerator : public PsshGenerator {
  public:
-  WidevinePsshGenerator();
+  explicit WidevinePsshGenerator(FourCC protection_scheme);
   ~WidevinePsshGenerator() override;
 
   /// @name PsshGenerator implemetation overrides.
@@ -36,9 +32,6 @@ class WidevinePsshGenerator : public PsshGenerator {
   WidevinePsshGenerator(const WidevinePsshGenerator&) = delete;
 
   // PsshGenerator implemetation overrides.
-  uint8_t PsshBoxVersion() const override;
-
-  const std::vector<uint8_t>& SystemId() const override;
 
   base::Optional<std::vector<uint8_t>> GeneratePsshDataFromKeyIds(
       const std::vector<std::vector<uint8_t>>& key_ids) const override;
@@ -47,7 +40,7 @@ class WidevinePsshGenerator : public PsshGenerator {
       const std::vector<uint8_t>& key_id,
       const std::vector<uint8_t>& key) const override;
 
-  std::vector<uint8_t> system_id_;
+  FourCC protection_scheme_ = FOURCC_NULL;
 };
 
 }  // namespace media

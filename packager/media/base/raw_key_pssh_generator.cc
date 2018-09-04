@@ -6,26 +6,21 @@
 
 #include "packager/media/base/raw_key_pssh_generator.h"
 
-#include "packager/media/base/raw_key_source.h"
-
 namespace shaka {
 namespace media {
+namespace {
+const uint8_t kCommonSystemPsshBoxVersion = 1;
+}  // namespace
 
 RawKeyPsshGenerator::RawKeyPsshGenerator()
-    : system_id_(std::begin(kCommonSystemId), std::end(kCommonSystemId)) {}
+    : PsshGenerator(std::vector<uint8_t>(std::begin(kCommonSystemId),
+                                         std::end(kCommonSystemId)),
+                    kCommonSystemPsshBoxVersion) {}
 
-RawKeyPsshGenerator::~RawKeyPsshGenerator() {}
+RawKeyPsshGenerator::~RawKeyPsshGenerator() = default;
 
 bool RawKeyPsshGenerator::SupportMultipleKeys() {
   return true;
-}
-
-uint8_t RawKeyPsshGenerator::PsshBoxVersion() const {
-  return 1;
-}
-
-const std::vector<uint8_t>& RawKeyPsshGenerator::SystemId() const {
-  return system_id_;
 }
 
 base::Optional<std::vector<uint8_t>>
@@ -42,5 +37,6 @@ RawKeyPsshGenerator::GeneratePsshDataFromKeyIds(
   // Intentionally empty PSSH data for RawKey.
   return std::vector<uint8_t>();
 }
+
 }  // namespace media
 }  // namespace shaka

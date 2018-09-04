@@ -17,12 +17,6 @@
 namespace shaka {
 namespace media {
 
-// Unofficial fairplay system id extracted from
-// https://forums.developer.apple.com/thread/6185.
-const uint8_t kFairplaySystemId[] = {0x29, 0x70, 0x1F, 0xE4, 0x3C, 0xC7,
-                                     0x4A, 0x34, 0x8C, 0x5B, 0xAE, 0x90,
-                                     0xC7, 0x43, 0x9A, 0x47};
-
 /// A key source that uses raw keys for encryption.
 class RawKeySource : public KeySource {
  public:
@@ -43,16 +37,23 @@ class RawKeySource : public KeySource {
   /// Creates a new RawKeySource from the given data.  Returns null
   /// if the parameter is malformed.
   /// @param raw_key contains parameters to setup the key source.
+  /// @param protection_systems_flags is the flags indicating which PSSH should
+  ///        be included.
+  /// @param protection_scheme is the Protection Scheme to be used for
+  ///        encryption. It needs to be signalled in Widevine PSSH. This
+  ///        argument can be ignored if Widevine PSSH is not generated.
   static std::unique_ptr<RawKeySource> Create(const RawKeyParams& raw_key,
-                                              int protection_system_flags);
+                                              int protection_system_flags,
+                                              FourCC protection_scheme);
 
  protected:
   // Allow default constructor for mock key sources.
   RawKeySource();
 
  private:
-  explicit RawKeySource(EncryptionKeyMap&& encryption_key_map,
-                        int protection_systems_flags);
+  RawKeySource(EncryptionKeyMap&& encryption_key_map,
+               int protection_systems_flags,
+               FourCC protection_scheme);
   RawKeySource(const RawKeySource&) = delete;
   RawKeySource& operator=(const RawKeySource&) = delete;
 
