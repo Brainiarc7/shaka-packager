@@ -7,9 +7,9 @@
 #include "packager/media/base/key_source.h"
 
 #include "packager/base/logging.h"
-#include "packager/media/base/fairplay_pssh_generator.h"
+#include "packager/media/base/common_pssh_generator.h"
 #include "packager/media/base/playready_pssh_generator.h"
-#include "packager/media/base/raw_key_pssh_generator.h"
+#include "packager/media/base/protection_system_ids.h"
 #include "packager/media/base/widevine_pssh_generator.h"
 #include "packager/status_macros.h"
 
@@ -18,7 +18,7 @@ namespace media {
 
 KeySource::KeySource(int protection_systems_flags, FourCC protection_scheme) {
   if (protection_systems_flags & COMMON_PROTECTION_SYSTEM_FLAG) {
-    pssh_generators_.emplace_back(new RawKeyPsshGenerator());
+    pssh_generators_.emplace_back(new CommonPsshGenerator());
   }
 
   if (protection_systems_flags & PLAYREADY_PROTECTION_SYSTEM_FLAG) {
@@ -30,7 +30,15 @@ KeySource::KeySource(int protection_systems_flags, FourCC protection_scheme) {
   }
 
   if (protection_systems_flags & FAIRPLAY_PROTECTION_SYSTEM_FLAG) {
-    pssh_generators_.emplace_back(new FairPlayPsshGenerator());
+    no_pssh_systems_.emplace_back(std::begin(kFairPlaySystemId),
+                                  std::end(kFairPlaySystemId));
+  }
+  // We only support Marlin Adaptive Streaming Specification – Simple Profile
+  // with Implicit Content ID Mapping, which does not need a PSSH. Marlin
+  // specific PSSH with Explicit Content ID Mapping is not generated.
+  if (protection_systems_flags & MARLIN_PROTECTION_SYSTEM_FLAG) {
+    no_pssh_systems_.emplace_back(std::begin(kMarlinSystemId),
+                                  std::end(kMarlinSystemId));
   }
 }
 
@@ -57,6 +65,14 @@ Status KeySource::UpdateProtectionSystemInfo(
             pair.second->key_id, pair.second->key, &info));
         pair.second->key_system_info.push_back(info);
       }
+    }
+  }
+
+  for (const auto& no_pssh_system : no_pssh_systems_) {
+    ProtectionSystemSpecificInfo info;
+    info.system_id = no_pssh_system;
+    for (const EncryptionKeyMap::value_type& pair : *encryption_key_map) {
+      pair.second->key_system_info.push_back(info);
     }
   }
 

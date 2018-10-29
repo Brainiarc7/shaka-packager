@@ -13,7 +13,7 @@
 #include "packager/base/strings/string_number_conversions.h"
 #include "packager/base/strings/stringprintf.h"
 #include "packager/media/base/key_fetcher.h"
-#include "packager/media/base/raw_key_pssh_generator.h"
+#include "packager/media/base/protection_system_ids.h"
 #include "packager/media/base/request_signer.h"
 #include "packager/media/base/widevine_key_source.h"
 #include "packager/media/base/widevine_pssh_generator.h"
