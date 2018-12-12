@@ -330,7 +330,8 @@ MediaPlaylist::MediaPlaylist(const HlsParams& hls_params,
     : hls_params_(hls_params),
       file_name_(file_name),
       name_(name),
-      group_id_(group_id) {}
+      group_id_(group_id),
+      bandwidth_estimator_(hls_params_.target_segment_duration) {}
 
 MediaPlaylist::~MediaPlaylist() {}
 
@@ -345,6 +346,11 @@ void MediaPlaylist::SetCodecForTesting(const std::string& codec) {
 
 void MediaPlaylist::SetLanguageForTesting(const std::string& language) {
   language_ = language;
+}
+
+void MediaPlaylist::SetCharacteristicsForTesting(
+    const std::vector<std::string>& characteristics) {
+  characteristics_ = characteristics;
 }
 
 bool MediaPlaylist::SetMediaInfo(const MediaInfo& media_info) {
@@ -369,6 +375,9 @@ bool MediaPlaylist::SetMediaInfo(const MediaInfo& media_info) {
   media_info_ = media_info;
   language_ = GetLanguage(media_info);
   use_byte_range_ = !media_info_.has_segment_template_url();
+  characteristics_ =
+      std::vector<std::string>(media_info_.hls_characteristics().begin(),
+                               media_info_.hls_characteristics().end());
   return true;
 }
 

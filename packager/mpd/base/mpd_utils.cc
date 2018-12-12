@@ -319,7 +319,8 @@ Element GenerateMarlinContentIds(const std::string& key_id) {
   Element marlin_content_id;
   marlin_content_id.name = kMarlinContentIdName;
   marlin_content_id.content =
-      kMarlinContentIdPrefix + base::HexEncode(key_id.data(), key_id.size());
+      kMarlinContentIdPrefix +
+      base::ToLowerASCII(base::HexEncode(key_id.data(), key_id.size()));
 
   Element marlin_content_ids;
   marlin_content_ids.name = kMarlinContentIdsName;
@@ -384,7 +385,6 @@ void AddContentProtectionElementsHelperTemplated(
     }
 
     ContentProtectionElement drm_content_protection;
-    drm_content_protection.scheme_id_uri = "urn:uuid:" + entry.uuid();
 
     if (entry.has_name_version())
       drm_content_protection.value = entry.name_version();
@@ -394,11 +394,17 @@ void AddContentProtectionElementsHelperTemplated(
                  "not support DASH signaling.";
       continue;
     } else if (entry.uuid() == kMarlinUUID) {
+      // Marlin requires its uuid to be in upper case. See #525 for details.
+      drm_content_protection.scheme_id_uri =
+          "urn:uuid:" + base::ToUpperASCII(entry.uuid());
       drm_content_protection.subelements.push_back(
           GenerateMarlinContentIds(protected_content.default_key_id()));
-    } else if (!entry.pssh().empty()) {
-      drm_content_protection.subelements.push_back(
-          GenerateCencPsshElement(entry.pssh()));
+    } else {
+      drm_content_protection.scheme_id_uri = "urn:uuid:" + entry.uuid();
+      if (!entry.pssh().empty()) {
+        drm_content_protection.subelements.push_back(
+            GenerateCencPsshElement(entry.pssh()));
+      }
     }
 
     if (!key_id_uuid_format.empty() && !is_mp4_container) {

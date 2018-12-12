@@ -53,7 +53,12 @@ struct MpdParams {
   /// The tracks tagged with this language will have <Role ... value=\"main\" />
   /// in the manifest. This allows the player to choose the correct default
   /// language for the content.
+  /// This applies to both audio and text tracks. The default language for text
+  /// tracks can be overriden by 'default_text_language'.
   std::string default_language;
+  /// Same as above, but this overrides the default language for text tracks,
+  /// i.e. subtitles or close-captions.
+  std::string default_text_language;
   /// Generate static MPD for live profile. Note that this flag has no effect
   /// for on-demand profile, in which case static MPD is always used.
   bool generate_static_live_mpd = false;
@@ -69,6 +74,14 @@ struct MpdParams {
   /// Ignored if $Time$ is used in segment template, since $Time$ requires
   /// accurate Segment Timeline.
   bool allow_approximate_segment_timeline = false;
+  /// This is the target segment duration requested by the user. The actual
+  /// segment duration may be different to the target segment duration.
+  /// This parameter is included here to calculate the approximate
+  /// SegmentTimeline if it is enabled. It is also used by the bandwidth
+  /// estimator to exclude the segments with duration less than half of the
+  /// target duration from bandwidth estimation. It will be populated from
+  /// segment duration specified in ChunkingParams if not specified.
+  double target_segment_duration = 0;
 };
 
 }  // namespace shaka

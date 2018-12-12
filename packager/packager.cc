@@ -91,6 +91,7 @@ MuxerListenerFactory::StreamData ToMuxerListenerData(
   data.hls_name = stream.hls_name;
   data.hls_playlist_name = stream.hls_playlist_name;
   data.hls_iframe_playlist_name = stream.hls_iframe_playlist_name;
+  data.hls_characteristics = stream.hls_characteristics;
   return data;
 };
 
@@ -278,6 +279,8 @@ Status ValidateParams(const PackagingParams& packaging_params,
   // generates multiple segments specified using segment template.
   const bool on_demand_dash_profile =
       stream_descriptors.begin()->segment_template.empty();
+  std::set<std::string> outputs;
+  std::set<std::string> segment_templates;
   for (const auto& descriptor : stream_descriptors) {
     if (on_demand_dash_profile != descriptor.segment_template.empty()) {
       return Status(error::INVALID_ARGUMENT,
@@ -302,6 +305,27 @@ Status ValidateParams(const PackagingParams& packaging_params,
       }
       // Skip the check for DASH as DASH defaults to 'dynamic' MPD when segment
       // template is provided.
+    }
+
+    if (!descriptor.output.empty()) {
+      if (outputs.find(descriptor.output) != outputs.end()) {
+        return Status(
+            error::INVALID_ARGUMENT,
+            "Seeing duplicated outputs '" + descriptor.output +
+                "' in stream descriptors. Every output must be unique.");
+      }
+      outputs.insert(descriptor.output);
+    }
+    if (!descriptor.segment_template.empty()) {
+      if (segment_templates.find(descriptor.segment_template) !=
+          segment_templates.end()) {
+        return Status(error::INVALID_ARGUMENT,
+                      "Seeing duplicated segment templates '" +
+                          descriptor.segment_template +
+                          "' in stream descriptors. Every segment template "
+                          "must be unique.");
+      }
+      segment_templates.insert(descriptor.segment_template);
     }
   }
 
@@ -867,33 +891,45 @@ Status Packager::Initialize(
       return Status(error::INVALID_ARGUMENT, "Failed to create key source.");
   }
 
-  // Store callback params to make it available during packaging.
-  internal->buffer_callback_params = packaging_params.buffer_callback_params;
-
-  // Update MPD output and HLS output if callback param is specified.
+  // Update MPD output and HLS output if needed.
   MpdParams mpd_params = packaging_params.mpd_params;
   HlsParams hls_params = packaging_params.hls_params;
+
+  // |target_segment_duration| is needed for bandwidth estimation and also for
+  // DASH approximate segment timeline.
+  const double target_segment_duration =
+      packaging_params.chunking_params.segment_duration_in_seconds;
+  if (mpd_params.target_segment_duration != 0)
+    mpd_params.target_segment_duration = target_segment_duration;
+  if (hls_params.target_segment_duration != 0)
+    hls_params.target_segment_duration = target_segment_duration;
+
+  // Store callback params to make it available during packaging.
+  internal->buffer_callback_params = packaging_params.buffer_callback_params;
   if (internal->buffer_callback_params.write_func) {
     mpd_params.mpd_output = File::MakeCallbackFileName(
         internal->buffer_callback_params, mpd_params.mpd_output);
     hls_params.master_playlist_output = File::MakeCallbackFileName(
         internal->buffer_callback_params, hls_params.master_playlist_output);
   }
+
   // Both DASH and HLS require language to follow RFC5646
   // (https://tools.ietf.org/html/rfc5646), which requires the language to be
   // in the shortest form.
   mpd_params.default_language =
       LanguageToShortestForm(mpd_params.default_language);
+  mpd_params.default_text_language =
+      LanguageToShortestForm(mpd_params.default_text_language);
   hls_params.default_language =
       LanguageToShortestForm(hls_params.default_language);
+  hls_params.default_text_language =
+      LanguageToShortestForm(hls_params.default_text_language);
 
   if (!mpd_params.mpd_output.empty()) {
     const bool on_demand_dash_profile =
         stream_descriptors.begin()->segment_template.empty();
-    const double target_segment_duration =
-        packaging_params.chunking_params.segment_duration_in_seconds;
-    const MpdOptions mpd_options = media::GetMpdOptions(
-        on_demand_dash_profile, mpd_params, target_segment_duration);
+    const MpdOptions mpd_options =
+        media::GetMpdOptions(on_demand_dash_profile, mpd_params);
     internal->mpd_notifier.reset(new SimpleMpdNotifier(mpd_options));
     if (!internal->mpd_notifier->Init()) {
       LOG(ERROR) << "MpdNotifier failed to initialize.";

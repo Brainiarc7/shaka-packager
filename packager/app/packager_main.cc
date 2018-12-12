@@ -101,7 +101,10 @@ const char kUsage[] =
     "  - iframe_playlist_name: The optional HLS I-Frames only playlist file\n"
     "    to create. Usually ends with '.m3u8', and is relative to\n"
     "    hls_master_playlist_output. Should only be set for video streams. If\n"
-    "    unspecified, no I-Frames only playlist is created.\n";
+    "    unspecified, no I-Frames only playlist is created.\n"
+    "  - hls_characteristics (charcs): Optional colon/semicolon separated\n"
+    "    list of values for the CHARACTERISTICS attribute for EXT-X-MEDIA.\n"
+    "    See CHARACTERISTICS attribute in http://bit.ly/2OOUkdB for details.\n";
 
 // Labels for parameters in RawKey key info.
 const char kDrmLabelLabel[] = "label";
@@ -440,6 +443,7 @@ base::Optional<PackagingParams> GetPackagingParams() {
   }
 
   mpd_params.default_language = FLAGS_default_language;
+  mpd_params.default_text_language = FLAGS_default_text_language;
   mpd_params.generate_static_live_mpd = FLAGS_generate_static_mpd;
   mpd_params.generate_dash_if_iop_compliant_mpd =
       FLAGS_generate_dash_if_iop_compliant_mpd;
@@ -457,6 +461,7 @@ base::Optional<PackagingParams> GetPackagingParams() {
   hls_params.preserved_segments_outside_live_window =
       FLAGS_preserved_segments_outside_live_window;
   hls_params.default_language = FLAGS_default_language;
+  hls_params.default_text_language = FLAGS_default_text_language;
 
   TestParams& test_params = packaging_params.test_params;
   test_params.dump_stream_info = FLAGS_dump_stream_info;
