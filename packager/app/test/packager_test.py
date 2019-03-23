@@ -9,6 +9,7 @@
 
 import filecmp
 import glob
+import logging
 import os
 import re
 import shutil
@@ -172,7 +173,7 @@ def _UpdateMediaInfoPaths(media_info_filepath):
   #   after:  media_file_name: "bear-640x360-audio.mp4"
 
   with open(media_info_filepath, 'rb') as f:
-    content = f.read()
+    content = f.read().decode()
 
   regex = 'media_file_name: "(.*)"'
   for path in re.findall(regex, content):
@@ -180,7 +181,7 @@ def _UpdateMediaInfoPaths(media_info_filepath):
     content = content.replace(path, short_path)
 
   with open(media_info_filepath, 'wb') as f:
-    f.write(content)
+    f.write(content.encode())
 
 
 def _UpdateMpdTimes(mpd_filepath):
@@ -192,14 +193,14 @@ def _UpdateMpdTimes(mpd_filepath):
     if m:
       old = m.group(0)
       out = str_in.replace(old, new)
-      print 'Replacing "%s" with "%s"' % (old, new)
+      logging.info('Replacing "%s" with "%s"', old, new)
     else:
       out = str_in
 
     return out
 
   with open(mpd_filepath, 'rb') as f:
-    content = f.read()
+    content = f.read().decode()
 
   content = _Replace(
       content,
@@ -212,7 +213,7 @@ def _UpdateMpdTimes(mpd_filepath):
       'publishTime="some_time"')
 
   with open(mpd_filepath, 'wb') as f:
-    f.write(content)
+    f.write(content.encode())
 
 
 def GetExtension(input_file_path, output_format):
@@ -233,6 +234,7 @@ def GetSegmentedExtension(base_extension):
 class PackagerAppTest(unittest.TestCase):
 
   def setUp(self):
+    super(PackagerAppTest, self).setUp()
     self.packager = packager_app.PackagerApp()
     self.tmp_dir = tempfile.mkdtemp()
     self.test_data_dir = os.path.join(test_env.SRC_DIR, 'packager', 'media',
@@ -262,6 +264,7 @@ class PackagerAppTest(unittest.TestCase):
   def tearDown(self):
     if test_env.options.remove_temp_files_after_test:
       shutil.rmtree(self.tmp_dir)
+    super(PackagerAppTest, self).tearDown()
 
   def _GetStream(self,
                  descriptor,
@@ -1488,7 +1491,7 @@ class PackagerFunctionalTest(PackagerAppTest):
                          test_files=['bear-1280x720.mp4', 'bear-640x360.mp4',
                                      'bear-320x180.mp4']), flags)
     with open(self.mpd_output, 'rb') as f:
-      print f.read()
+      logging.info(f.read())
       # TODO(kqyang): Add some validations.
 
   @unittest.skipUnless(test_env.has_aes_flags, 'Requires AES credentials.')
