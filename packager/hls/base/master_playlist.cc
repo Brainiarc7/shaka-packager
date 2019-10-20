@@ -222,6 +222,16 @@ void BuildStreamInfTag(const MediaPlaylist& playlist,
   uint32_t height;
   if (playlist.GetDisplayResolution(&width, &height)) {
     tag.AddNumberPair("RESOLUTION", width, 'x', height);
+
+    // Right now the frame-rate returned may not be accurate in some scenarios.
+    // TODO(kqyang): Fix frame-rate computation.
+    const double frame_rate = playlist.GetFrameRate();
+    if (frame_rate > 0)
+      tag.AddFloat("FRAME-RATE", frame_rate);
+
+    const std::string video_range = playlist.GetVideoRange();
+    if (!video_range.empty())
+      tag.AddString("VIDEO-RANGE", video_range);
   }
 
   if (variant.audio_group_id) {

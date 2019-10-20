@@ -142,6 +142,7 @@ Status SubsampleGenerator::Initialize(FourCC protection_scheme,
       header_parser_.reset(new H264VideoSliceHeaderParser);
       break;
     case kCodecH265:
+    case kCodecH265DolbyVision:
       header_parser_.reset(new H265VideoSliceHeaderParser);
       break;
     default:
@@ -220,6 +221,7 @@ Status SubsampleGenerator::GenerateSubsamples(
     case kCodecH264:
       FALLTHROUGH_INTENDED;
     case kCodecH265:
+    case kCodecH265DolbyVision:
       return GenerateSubsamplesFromH26xFrame(frame, frame_size, subsamples);
     case kCodecVP9:
       if (vp9_subsample_encryption_)
@@ -300,12 +302,20 @@ Status SubsampleGenerator::GenerateSubsamplesFromH26xFrame(
   SubsampleOrganizer subsample_organizer(align_protected_data_, subsamples);
 
   const Nalu::CodecType nalu_type =
-      (codec_ == kCodecH265) ? Nalu::kH265 : Nalu::kH264;
+      (codec_ == kCodecH265 || codec_ == kCodecH265DolbyVision) ? Nalu::kH265
+                                                                : Nalu::kH264;
   NaluReader reader(nalu_type, nalu_length_size_, frame, frame_size);
 
   Nalu nalu;
   NaluReader::Result result;
   while ((result = reader.Advance(&nalu)) == NaluReader::kOk) {
+    // |header_parser_| is only used if |leading_clear_bytes_size_| is not
+    // availble. See lines below.
+    if (leading_clear_bytes_size_ == 0 && !header_parser_->ProcessNalu(nalu)) {
+      LOG(ERROR) << "Failed to process NAL unit: NAL type = " << nalu.type();
+      return Status(error::ENCRYPTION_FAILURE, "Failed to process NAL unit.");
+    }
+
     const size_t nalu_total_size = nalu.header_size() + nalu.payload_size();
     size_t clear_bytes = 0;
     if (nalu.is_video_slice() && nalu_total_size >= min_protected_data_size_) {

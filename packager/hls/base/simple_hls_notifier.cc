@@ -184,14 +184,15 @@ base::Optional<MediaPlaylist::EncryptionMethod> StringToEncryptionMethod(
     const std::string& method) {
   if (method == "cenc") {
     return MediaPlaylist::EncryptionMethod::kSampleAesCenc;
-  } else if (method == "cbcs") {
+  }
+  if (method == "cbcs") {
     return MediaPlaylist::EncryptionMethod::kSampleAes;
-  } else if (method == "cbca") {
+  }
+  if (method == "cbca") {
     // cbca is a place holder for sample aes.
     return MediaPlaylist::EncryptionMethod::kSampleAes;
-  } else {
-    return base::nullopt;
   }
+  return base::nullopt;
 }
 
 void NotifyEncryptionToMediaPlaylist(
@@ -342,6 +343,19 @@ bool SimpleHlsNotifier::NotifyNewStream(const MediaInfo& media_info,
   return true;
 }
 
+bool SimpleHlsNotifier::NotifySampleDuration(uint32_t stream_id,
+                                             uint32_t sample_duration) {
+  base::AutoLock auto_lock(lock_);
+  auto stream_iterator = stream_map_.find(stream_id);
+  if (stream_iterator == stream_map_.end()) {
+    LOG(ERROR) << "Cannot find stream with ID: " << stream_id;
+    return false;
+  }
+  auto& media_playlist = stream_iterator->second->media_playlist;
+  media_playlist->SetSampleDuration(sample_duration);
+  return true;
+}
+
 bool SimpleHlsNotifier::NotifyNewSegment(uint32_t stream_id,
                                          const std::string& segment_name,
                                          uint64_t start_time,
@@ -459,7 +473,8 @@ bool SimpleHlsNotifier::NotifyEncryptionUpdate(
     NotifyEncryptionToMediaPlaylist(encryption_method, key_uri, empty_key_id,
                                     iv, "identity", "", media_playlist.get());
     return true;
-  } else if (IsFairPlaySystemId(system_id)) {
+  }
+  if (IsFairPlaySystemId(system_id)) {
     std::string key_uri = hls_params().key_uri;
     if (key_uri.empty()) {
       // Use key_id as the key_uri. The player needs to have custom logic to

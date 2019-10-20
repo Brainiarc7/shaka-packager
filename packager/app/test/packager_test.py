@@ -1203,6 +1203,24 @@ class PackagerFunctionalTest(PackagerAppTest):
     self.assertPackageSuccess(streams, flags)
     self._CheckTestResults('hevc-with-encryption', verify_decryption=True)
 
+  def testHdr10WithEncryption(self):
+    streams = [
+        self._GetStream('video', test_file='bear-640x360-hevc-hdr10.mp4')
+    ]
+    flags = self._GetFlags(encryption=True, output_dash=True, output_hls=True)
+
+    self.assertPackageSuccess(streams, flags)
+    self._CheckTestResults('hdr10-with-encryption')
+
+  def testDolbyVisionProfile5WithEncryption(self):
+    streams = [
+        self._GetStream('video', test_file='sparks_dovi_5.mp4')
+    ]
+    flags = self._GetFlags(encryption=True, output_dash=True, output_hls=True)
+
+    self.assertPackageSuccess(streams, flags)
+    self._CheckTestResults('dolby-vision-profile-5-with-encryption')
+
   def testVp8Mp4WithEncryption(self):
     streams = [
         self._GetStream('video',

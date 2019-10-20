@@ -99,6 +99,12 @@ class MediaPlaylist {
   /// @return true on success, false otherwise.
   virtual bool SetMediaInfo(const MediaInfo& media_info);
 
+  /// Set the sample duration. Sample duration is used to generate frame rate.
+  /// Sample duration is not available right away especially. This allows
+  /// setting the sample duration after the Media Playlist has been initialized.
+  /// @param sample_duration is the duration of a sample.
+  virtual void SetSampleDuration(uint32_t sample_duration);
+
   /// Segments must be added in order.
   /// @param file_name is the file name of the segment.
   /// @param start_time is in terms of the timescale of the media.
@@ -186,6 +192,12 @@ class MediaPlaylist {
   ///         resolution values.
   virtual bool GetDisplayResolution(uint32_t* width, uint32_t* height) const;
 
+  /// @return The video range of the stream.
+  virtual std::string GetVideoRange() const;
+
+  /// @return the frame rate.
+  virtual double GetFrameRate() const;
+
   /// @return the language of the media, as an ISO language tag in its shortest
   ///         form.  May be an empty string for video.
   const std::string& language() const { return language_; }
@@ -228,7 +240,7 @@ class MediaPlaylist {
   bool inserted_discontinuity_tag_ = false;
   int discontinuity_sequence_number_ = 0;
 
-  double longest_segment_duration_ = 0.0;
+  double longest_segment_duration_seconds_ = 0.0;
   uint32_t time_scale_ = 0;
 
   BandwidthEstimator bandwidth_estimator_;

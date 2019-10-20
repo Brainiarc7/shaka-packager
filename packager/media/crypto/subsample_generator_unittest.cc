@@ -21,6 +21,7 @@ namespace media {
 namespace {
 
 using ::testing::_;
+using ::testing::AtLeast;
 using ::testing::DoAll;
 using ::testing::ElementsAre;
 using ::testing::ElementsAreArray;
@@ -62,6 +63,7 @@ VideoStreamInfo GetVideoStreamInfo(Codec codec) {
   const uint16_t kHeight = 20u;
   const uint32_t kPixelWidth = 2u;
   const uint32_t kPixelHeight = 3u;
+  const uint8_t kTransferCharacteristics = 0;
   const int16_t kTrickPlayFactor = 0;
   const uint8_t kNaluLengthSize = 1u;
 
@@ -80,11 +82,11 @@ VideoStreamInfo GetVideoStreamInfo(Codec codec) {
       // We do not care about the codec configs for other codecs in this file.
       break;
   }
-  return VideoStreamInfo(kTrackId, kTimeScale, kDuration, codec,
-                         H26xStreamFormat::kUnSpecified, kCodecString,
-                         codec_config, codec_config_size, kWidth, kHeight,
-                         kPixelWidth, kPixelHeight, kTrickPlayFactor,
-                         kNaluLengthSize, kLanguage, !kEncrypted);
+  return VideoStreamInfo(
+      kTrackId, kTimeScale, kDuration, codec, H26xStreamFormat::kUnSpecified,
+      kCodecString, codec_config, codec_config_size, kWidth, kHeight,
+      kPixelWidth, kPixelHeight, kTransferCharacteristics, kTrickPlayFactor,
+      kNaluLengthSize, kLanguage, !kEncrypted);
 }
 
 AudioStreamInfo GetAudioStreamInfo(Codec codec) {
@@ -123,6 +125,7 @@ class MockVideoSliceHeaderParser : public VideoSliceHeaderParser {
  public:
   MOCK_METHOD1(Initialize,
                bool(const std::vector<uint8_t>& decoder_configuration));
+  MOCK_METHOD1(ProcessNalu, bool(const Nalu& nalu));
   MOCK_METHOD1(GetHeaderSize, int64_t(const Nalu& nalu));
 };
 
@@ -290,6 +293,8 @@ TEST_P(SubsampleGeneratorTest, H264ParseFailed) {
 
   std::unique_ptr<MockVideoSliceHeaderParser> mock_video_slice_header_parser(
       new MockVideoSliceHeaderParser);
+  EXPECT_CALL(*mock_video_slice_header_parser, ProcessNalu(_))
+      .WillOnce(Return(true));
   EXPECT_CALL(*mock_video_slice_header_parser, GetHeaderSize(_))
       .WillOnce(Return(-1));
 
@@ -342,6 +347,9 @@ TEST_P(SubsampleGeneratorTest, H264SubsampleEncryption) {
 
   std::unique_ptr<MockVideoSliceHeaderParser> mock_video_slice_header_parser(
       new MockVideoSliceHeaderParser);
+  EXPECT_CALL(*mock_video_slice_header_parser, ProcessNalu(_))
+      .Times(AtLeast(2))
+      .WillRepeatedly(Return(true));
   EXPECT_CALL(*mock_video_slice_header_parser, GetHeaderSize(_))
       .WillOnce(Return(kSliceHeaderSize[0]))
       .WillOnce(Return(kSliceHeaderSize[1]));
