@@ -343,6 +343,9 @@ base::Optional<PackagingParams> GetPackagingParams() {
     encryption_params.clear_lead_in_seconds = FLAGS_clear_lead;
     if (!GetProtectionScheme(&encryption_params.protection_scheme))
       return base::nullopt;
+    encryption_params.crypt_byte_block = FLAGS_crypt_byte_block;
+    encryption_params.skip_byte_block = FLAGS_skip_byte_block;
+
     encryption_params.crypto_period_duration_in_seconds =
         FLAGS_crypto_period_duration;
     encryption_params.vp9_subsample_encryption = FLAGS_vp9_subsample_encryption;
@@ -457,6 +460,8 @@ base::Optional<PackagingParams> GetPackagingParams() {
       FLAGS_generate_dash_if_iop_compliant_mpd;
   mpd_params.allow_approximate_segment_timeline =
       FLAGS_allow_approximate_segment_timeline;
+  mpd_params.allow_codec_switching = FLAGS_allow_codec_switching;
+  mpd_params.include_mspr_pro = FLAGS_include_mspr_pro_for_playready;
 
   HlsParams& hls_params = packaging_params.hls_params;
   if (!GetHlsPlaylistType(FLAGS_hls_playlist_type, &hls_params.playlist_type)) {
@@ -470,6 +475,7 @@ base::Optional<PackagingParams> GetPackagingParams() {
       FLAGS_preserved_segments_outside_live_window;
   hls_params.default_language = FLAGS_default_language;
   hls_params.default_text_language = FLAGS_default_text_language;
+  hls_params.media_sequence_number = FLAGS_hls_media_sequence_number;
 
   TestParams& test_params = packaging_params.test_params;
   test_params.dump_stream_info = FLAGS_dump_stream_info;

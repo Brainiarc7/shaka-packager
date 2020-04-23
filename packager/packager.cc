@@ -93,9 +93,11 @@ MuxerListenerFactory::StreamData ToMuxerListenerData(
   data.hls_playlist_name = stream.hls_playlist_name;
   data.hls_iframe_playlist_name = stream.hls_iframe_playlist_name;
   data.hls_characteristics = stream.hls_characteristics;
+  data.hls_only = stream.hls_only;
 
   data.dash_accessiblities = stream.dash_accessiblities;
   data.dash_roles = stream.dash_roles;
+  data.dash_only = stream.dash_only;
   return data;
 };
 
@@ -400,6 +402,12 @@ bool StreamInfoToTextMediaInfo(const StreamDescriptor& stream_descriptor,
     text_media_info->set_bandwidth(kDefaultTextBandwidth);
   }
 
+  if (!stream_descriptor.dash_roles.empty()) {
+    for (const auto& dash_role : stream_descriptor.dash_roles) {
+      text_media_info->add_dash_roles(dash_role);
+    }
+  }
+
   return true;
 }
 
@@ -502,11 +510,7 @@ Status CreateHlsTextJob(const StreamDescriptor& stream,
   auto output = std::make_shared<WebVttTextOutputHandler>(
       muxer_options, std::move(muxer_listener));
 
-  std::unique_ptr<FileReader> reader;
-  RETURN_IF_ERROR(FileReader::Open(stream.input, &reader));
-
-  auto parser =
-      std::make_shared<WebVttParser>(std::move(reader), stream.language);
+  auto parser = std::make_shared<WebVttParser>(stream.input, stream.language);
   auto padder = std::make_shared<TextPadder>(kDefaultTextZeroBiasMs);
   auto cue_aligner = sync_points
                          ? std::make_shared<CueAlignmentHandler>(sync_points)
@@ -526,11 +530,7 @@ Status CreateWebVttToMp4TextJob(const StreamDescriptor& stream,
                                 SyncPointQueue* sync_points,
                                 MuxerFactory* muxer_factory,
                                 std::shared_ptr<OriginHandler>* root) {
-  std::unique_ptr<FileReader> reader;
-  RETURN_IF_ERROR(FileReader::Open(stream.input, &reader));
-
-  auto parser =
-      std::make_shared<WebVttParser>(std::move(reader), stream.language);
+  auto parser = std::make_shared<WebVttParser>(stream.input, stream.language);
   auto padder = std::make_shared<TextPadder>(kDefaultTextZeroBiasMs);
 
   auto text_to_mp4 = std::make_shared<WebVttToMp4Handler>();
