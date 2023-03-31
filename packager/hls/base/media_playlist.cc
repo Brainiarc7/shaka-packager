@@ -25,7 +25,7 @@ namespace shaka {
 namespace hls {
 
 namespace {
-uint32_t GetTimeScale(const MediaInfo& media_info) {
+int32_t GetTimeScale(const MediaInfo& media_info) {
   if (media_info.has_reference_time_scale())
     return media_info.reference_time_scale();
 
@@ -34,7 +34,7 @@ uint32_t GetTimeScale(const MediaInfo& media_info) {
 
   if (media_info.has_audio_info())
     return media_info.audio_info().time_scale();
-  return 0u;
+  return 0;
 }
 
 std::string AdjustVideoCodec(const std::string& codec) {
@@ -42,7 +42,7 @@ std::string AdjustVideoCodec(const std::string& codec) {
   // samples. It also fails mediastreamvalidator checks and some Apple devices /
   // platforms refused to play.
   // See https://apple.co/30n90DC 1.10 and
-  // https://github.com/google/shaka-packager/issues/587#issuecomment-489182182.
+  // https://github.com/shaka-project/shaka-packager/issues/587#issuecomment-489182182.
   // Replaced with the corresponding formats with the parameter sets stored in
   // the sample descriptions instead.
   std::string adjusted_codec = codec;
@@ -64,7 +64,7 @@ std::string AdjustVideoCodec(const std::string& codec) {
 // 1. MpdUtils header depends on libxml header, which is not in the deps here
 // 2. GetLanguage depends on MediaInfo from packager/mpd/
 // 3. Moving GetLanguage to LanguageUtils would create a a media => mpd dep.
-// TODO(https://github.com/google/shaka-packager/issues/373): Fix this
+// TODO(https://github.com/shaka-project/shaka-packager/issues/373): Fix this
 // dependency situation and factor this out to a common location.
 std::string GetLanguage(const MediaInfo& media_info) {
   std::string lang;
@@ -103,7 +103,7 @@ void AppendExtXMap(const MediaInfo& media_info, std::string* out) {
 
 std::string CreatePlaylistHeader(
     const MediaInfo& media_info,
-    uint32_t target_duration,
+    int32_t target_duration,
     HlsPlaylistType type,
     MediaPlaylist::MediaPlaylistStreamType stream_type,
     uint32_t media_sequence_number,
@@ -371,7 +371,7 @@ void MediaPlaylist::SetCharacteristicsForTesting(
 }
 
 bool MediaPlaylist::SetMediaInfo(const MediaInfo& media_info) {
-  const uint32_t time_scale = GetTimeScale(media_info);
+  const int32_t time_scale = GetTimeScale(media_info);
   if (time_scale == 0) {
     LOG(ERROR) << "MediaInfo does not contain a valid timescale.";
     return false;
@@ -391,7 +391,8 @@ bool MediaPlaylist::SetMediaInfo(const MediaInfo& media_info) {
   time_scale_ = time_scale;
   media_info_ = media_info;
   language_ = GetLanguage(media_info);
-  use_byte_range_ = !media_info_.has_segment_template_url();
+  use_byte_range_ = !media_info_.has_segment_template_url() &&
+                    media_info_.container_type() != MediaInfo::CONTAINER_TEXT;
   characteristics_ =
       std::vector<std::string>(media_info_.hls_characteristics().begin(),
                                media_info_.hls_characteristics().end());
@@ -399,7 +400,7 @@ bool MediaPlaylist::SetMediaInfo(const MediaInfo& media_info) {
   return true;
 }
 
-void MediaPlaylist::SetSampleDuration(uint32_t sample_duration) {
+void MediaPlaylist::SetSampleDuration(int32_t sample_duration) {
   if (media_info_.has_video_info())
     media_info_.mutable_video_info()->set_frame_duration(sample_duration);
 }
@@ -505,7 +506,7 @@ double MediaPlaylist::GetLongestSegmentDuration() const {
   return longest_segment_duration_seconds_;
 }
 
-void MediaPlaylist::SetTargetDuration(uint32_t target_duration) {
+void MediaPlaylist::SetTargetDuration(int32_t target_duration) {
   if (target_duration_set_) {
     if (target_duration_ == target_duration)
       return;
@@ -518,6 +519,18 @@ void MediaPlaylist::SetTargetDuration(uint32_t target_duration) {
 
 int MediaPlaylist::GetNumChannels() const {
   return media_info_.audio_info().num_channels();
+}
+
+int MediaPlaylist::GetEC3JocComplexity() const {
+  return media_info_.audio_info().codec_specific_data().ec3_joc_complexity();
+}
+
+bool MediaPlaylist::GetAC4ImsFlag() const {
+  return media_info_.audio_info().codec_specific_data().ac4_ims_flag();
+}
+
+bool MediaPlaylist::GetAC4CbiFlag() const {
+  return media_info_.audio_info().codec_specific_data().ac4_cbi_flag();
 }
 
 bool MediaPlaylist::GetDisplayResolution(uint32_t* width,
@@ -651,7 +664,7 @@ void MediaPlaylist::SlideWindow() {
       hls_params_.playlist_type != HlsPlaylistType::kLive) {
     return;
   }
-  DCHECK_GT(time_scale_, 0u);
+  DCHECK_GT(time_scale_, 0);
 
   if (current_buffer_depth_ <= hls_params_.time_shift_buffer_depth)
     return;

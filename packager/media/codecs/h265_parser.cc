@@ -28,6 +28,22 @@
       return status;     \
   } while (false)
 
+#define READ_LONG_OR_RETURN(out)                                           \
+  do {                                                                     \
+    int _top_half, _bottom_half;                                           \
+    if (!br->ReadBits(16, &_top_half)) {                                   \
+      DVLOG(1)                                                             \
+          << "Error in stream: unexpected EOS while trying to read " #out; \
+      return kInvalidStream;                                               \
+    }                                                                      \
+    if (!br->ReadBits(16, &_bottom_half)) {                                \
+      DVLOG(1)                                                             \
+          << "Error in stream: unexpected EOS while trying to read " #out; \
+      return kInvalidStream;                                               \
+    }                                                                      \
+    *(out) = ((long)_top_half) << 16 | _bottom_half;                       \
+  } while (false)
+
 namespace shaka {
 namespace media {
 
@@ -688,11 +704,10 @@ H265Parser::Result H265Parser::ParseVuiParameters(int max_num_sub_layers_minus1,
     TRUE_OR_RETURN(br->ReadUE(&ignored));  // def_disp_win_bottom_offset
   }
 
-  bool vui_timing_info_present_flag;
-  TRUE_OR_RETURN(br->ReadBool(&vui_timing_info_present_flag));
-  if (vui_timing_info_present_flag) {
-    // vui_num_units_in_tick, vui_time_scale
-    TRUE_OR_RETURN(br->SkipBits(32 + 32));
+  TRUE_OR_RETURN(br->ReadBool(&vui->vui_timing_info_present_flag));
+  if (vui->vui_timing_info_present_flag) {
+    READ_LONG_OR_RETURN(&vui->vui_num_units_in_tick);
+    READ_LONG_OR_RETURN(&vui->vui_time_scale);
 
     bool vui_poc_proportional_to_timing_flag;
     TRUE_OR_RETURN(br->ReadBool(&vui_poc_proportional_to_timing_flag));
@@ -877,7 +892,7 @@ H265Parser::Result H265Parser::SkipReferencePictureListModification(
   bool ref_pic_list_modification_flag_l0;
   TRUE_OR_RETURN(br->ReadBool(&ref_pic_list_modification_flag_l0));
   if (ref_pic_list_modification_flag_l0) {
-    for (int i = 0; i <= pps.num_ref_idx_l0_default_active_minus1; i++) {
+    for (int i = 0; i <= slice_header.num_ref_idx_l0_active_minus1; i++) {
       TRUE_OR_RETURN(br->SkipBits(ceil(log2(num_pic_total_curr))));
     }
   }
@@ -886,7 +901,7 @@ H265Parser::Result H265Parser::SkipReferencePictureListModification(
     bool ref_pic_list_modification_flag_l1;
     TRUE_OR_RETURN(br->ReadBool(&ref_pic_list_modification_flag_l1));
     if (ref_pic_list_modification_flag_l1) {
-      for (int i = 0; i <= pps.num_ref_idx_l1_default_active_minus1; i++) {
+      for (int i = 0; i <= slice_header.num_ref_idx_l1_active_minus1; i++) {
         TRUE_OR_RETURN(br->SkipBits(ceil(log2(num_pic_total_curr))));
       }
     }

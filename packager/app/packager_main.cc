@@ -48,6 +48,9 @@ DEFINE_bool(use_fake_clock_for_muxer,
 DEFINE_string(test_packager_version,
               "",
               "Packager version for testing. Should be used for testing only.");
+DEFINE_bool(single_threaded,
+            false,
+            "If enabled, only use one thread when generating content.");
 
 namespace shaka {
 namespace {
@@ -111,13 +114,14 @@ const char kUsage[] =
     "    in the format: scheme_id_uri=value.\n"
     "  - dash_roles (roles): Optional semicolon separated list of values for\n"
     "    DASH Role elements. The value should be one of: caption, subtitle,\n"
-    "    main, alternate, supplementary, commentary and dub. See DASH\n"
-    "    (ISO/IEC 23009-1) specification for details.\n";
+    "    main, alternate, supplementary, commentary, description and dub. See\n"
+    "    DASH (ISO/IEC 23009-1) specification for details.\n";
 
 // Labels for parameters in RawKey key info.
 const char kDrmLabelLabel[] = "label";
 const char kKeyIdLabel[] = "key_id";
 const char kKeyLabel[] = "key";
+const char kKeyIvLabel[] = "iv";
 
 enum ExitStatus {
   kSuccess = 0,
@@ -207,6 +211,17 @@ bool ParseKeys(const std::string& keys, RawKeyParams* raw_key) {
                  << value_map[kKeyLabel];
       return false;
     }
+    if (!value_map[kKeyIvLabel].empty()) {
+      if (!raw_key->iv.empty()) {
+        LOG(ERROR) << "IV already specified with --iv";
+        return false;
+      }
+      if (!base::HexStringToBytes(value_map[kKeyIvLabel], &key_info.iv)) {
+        LOG(ERROR) << "Empty IV or invalid hex string for IV: "
+                   << value_map[kKeyIvLabel];
+        return false;
+      }
+    }
   }
   return true;
 }
@@ -268,18 +283,17 @@ bool ParseAdCues(const std::string& ad_cues, std::vector<Cuepoint>* cuepoints) {
   return true;
 }
 
-bool ParseProtectionSystems(
-    const std::string& protection_systems_str,
-    std::vector<EncryptionParams::ProtectionSystem>* protection_systems) {
-  protection_systems->clear();
+bool ParseProtectionSystems(const std::string& protection_systems_str,
+                            ProtectionSystem* protection_systems) {
+  *protection_systems = ProtectionSystem::kNone;
 
-  std::map<std::string, EncryptionParams::ProtectionSystem> mapping = {
-      {"common", EncryptionParams::ProtectionSystem::kCommonSystem},
-      {"commonsystem", EncryptionParams::ProtectionSystem::kCommonSystem},
-      {"fairplay", EncryptionParams::ProtectionSystem::kFairPlay},
-      {"marlin", EncryptionParams::ProtectionSystem::kMarlin},
-      {"playready", EncryptionParams::ProtectionSystem::kPlayReady},
-      {"widevine", EncryptionParams::ProtectionSystem::kWidevine},
+  std::map<std::string, ProtectionSystem> mapping = {
+      {"common", ProtectionSystem::kCommon},
+      {"commonsystem", ProtectionSystem::kCommon},
+      {"fairplay", ProtectionSystem::kFairPlay},
+      {"marlin", ProtectionSystem::kMarlin},
+      {"playready", ProtectionSystem::kPlayReady},
+      {"widevine", ProtectionSystem::kWidevine},
   };
 
   for (const std::string& protection_system :
@@ -291,7 +305,7 @@ bool ParseProtectionSystems(
                  << protection_system;
       return false;
     }
-    protection_systems->push_back(iter->second);
+    *protection_systems |= iter->second;
   }
   return true;
 }
@@ -300,6 +314,7 @@ base::Optional<PackagingParams> GetPackagingParams() {
   PackagingParams packaging_params;
 
   packaging_params.temp_dir = FLAGS_temp_dir;
+  packaging_params.single_threaded = FLAGS_single_threaded;
 
   AdCueGeneratorParams& ad_cue_generator_params =
       packaging_params.ad_cue_generator_params;
@@ -310,6 +325,7 @@ base::Optional<PackagingParams> GetPackagingParams() {
   ChunkingParams& chunking_params = packaging_params.chunking_params;
   chunking_params.segment_duration_in_seconds = FLAGS_segment_duration;
   chunking_params.subsegment_duration_in_seconds = FLAGS_fragment_duration;
+  chunking_params.low_latency_dash_mode = FLAGS_low_latency_dash_mode;
   chunking_params.segment_sap_aligned = FLAGS_segment_sap_aligned;
   chunking_params.subsegment_sap_aligned = FLAGS_fragment_sap_aligned;
 
@@ -352,6 +368,8 @@ base::Optional<PackagingParams> GetPackagingParams() {
     encryption_params.stream_label_func = std::bind(
         &Packager::DefaultStreamLabelFunction, FLAGS_max_sd_pixels,
         FLAGS_max_hd_pixels, FLAGS_max_uhd1_pixels, std::placeholders::_1);
+    encryption_params.playready_extra_header_data =
+        FLAGS_playready_extra_header_data;
   }
   switch (encryption_params.key_provider) {
     case KeyProvider::kWidevine: {
@@ -370,12 +388,6 @@ base::Optional<PackagingParams> GetPackagingParams() {
       PlayReadyEncryptionParams& playready = encryption_params.playready;
       playready.key_server_url = FLAGS_playready_server_url;
       playready.program_identifier = FLAGS_program_identifier;
-      playready.ca_file = FLAGS_ca_file;
-      playready.client_cert_file = FLAGS_client_cert_file;
-      playready.client_cert_private_key_file =
-          FLAGS_client_cert_private_key_file;
-      playready.client_cert_private_key_password =
-          FLAGS_client_cert_private_key_password;
       break;
     }
     case KeyProvider::kRawKey: {
@@ -424,6 +436,7 @@ base::Optional<PackagingParams> GetPackagingParams() {
   mp4_params.generate_sidx_in_media_segments =
       FLAGS_generate_sidx_in_media_segments;
   mp4_params.include_pssh_in_stream = FLAGS_mp4_include_pssh_in_stream;
+  mp4_params.low_latency_dash_mode = FLAGS_low_latency_dash_mode;
 
   packaging_params.transport_stream_timestamp_offset_ms =
       FLAGS_transport_stream_timestamp_offset_ms;
@@ -440,6 +453,7 @@ base::Optional<PackagingParams> GetPackagingParams() {
   mpd_params.time_shift_buffer_depth = FLAGS_time_shift_buffer_depth;
   mpd_params.preserved_segments_outside_live_window =
       FLAGS_preserved_segments_outside_live_window;
+  mpd_params.use_segment_list = FLAGS_dash_force_segment_list;
 
   if (!FLAGS_utc_timings.empty()) {
     base::StringPairs pairs;
@@ -462,6 +476,7 @@ base::Optional<PackagingParams> GetPackagingParams() {
       FLAGS_allow_approximate_segment_timeline;
   mpd_params.allow_codec_switching = FLAGS_allow_codec_switching;
   mpd_params.include_mspr_pro = FLAGS_include_mspr_pro_for_playready;
+  mpd_params.low_latency_dash_mode = FLAGS_low_latency_dash_mode;
 
   HlsParams& hls_params = packaging_params.hls_params;
   if (!GetHlsPlaylistType(FLAGS_hls_playlist_type, &hls_params.playlist_type)) {
@@ -550,7 +565,7 @@ int PackagerMain(int argc, char** argv) {
 #if defined(OS_WIN)
 // Windows wmain, which converts wide character arguments to UTF-8.
 int wmain(int argc, wchar_t* argv[], wchar_t* envp[]) {
-  std::unique_ptr<char* [], std::function<void(char**)>> utf8_argv(
+  std::unique_ptr<char*[], std::function<void(char**)>> utf8_argv(
       new char*[argc], [argc](char** utf8_args) {
         // TODO(tinskip): This leaks, but if this code is enabled, it crashes.
         // Figure out why. I suspect gflags does something funny with the

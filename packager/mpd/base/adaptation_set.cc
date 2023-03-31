@@ -54,6 +54,8 @@ std::string RoleToText(AdaptationSet::Role role) {
       return "commentary";
     case AdaptationSet::kRoleDub:
       return "dub";
+    case AdaptationSet::kRoleDescription:
+      return "description";
     default:
       return "unknown";
   }
@@ -148,8 +150,8 @@ class RepresentationStateChangeListenerImpl
                                                    start_time, duration);
   }
 
-  void OnSetFrameRateForRepresentation(uint32_t frame_duration,
-                                       uint32_t timescale) override {
+  void OnSetFrameRateForRepresentation(int32_t frame_duration,
+                                       int32_t timescale) override {
     adaptation_set_->OnSetFrameRateForRepresentation(representation_id_,
                                                      frame_duration, timescale);
   }
@@ -237,41 +239,55 @@ void AdaptationSet::AddRole(Role role) {
 // can be passed to Representation to avoid setting redundant attributes. For
 // example, if AdaptationSet@width is set, then Representation@width is
 // redundant and should not be set.
-xml::scoped_xml_ptr<xmlNode> AdaptationSet::GetXml() {
+base::Optional<xml::XmlNode> AdaptationSet::GetXml() {
   xml::AdaptationSetXmlNode adaptation_set;
 
   bool suppress_representation_width = false;
   bool suppress_representation_height = false;
   bool suppress_representation_frame_rate = false;
 
-  if (id_)
-    adaptation_set.SetId(id_.value());
-  adaptation_set.SetStringAttribute("contentType", content_type_);
-  if (!language_.empty() && language_ != "und") {
-    adaptation_set.SetStringAttribute("lang", language_);
+  if (id_ && !adaptation_set.SetId(id_.value()))
+    return base::nullopt;
+  if (!adaptation_set.SetStringAttribute("contentType", content_type_))
+    return base::nullopt;
+  if (!language_.empty() && language_ != "und" &&
+      !adaptation_set.SetStringAttribute("lang", language_)) {
+    return base::nullopt;
   }
 
   // Note that std::{set,map} are ordered, so the last element is the max value.
   if (video_widths_.size() == 1) {
     suppress_representation_width = true;
-    adaptation_set.SetIntegerAttribute("width", *video_widths_.begin());
+    if (!adaptation_set.SetIntegerAttribute("width", *video_widths_.begin()))
+      return base::nullopt;
   } else if (video_widths_.size() > 1) {
-    adaptation_set.SetIntegerAttribute("maxWidth", *video_widths_.rbegin());
+    if (!adaptation_set.SetIntegerAttribute("maxWidth",
+                                            *video_widths_.rbegin())) {
+      return base::nullopt;
+    }
   }
   if (video_heights_.size() == 1) {
     suppress_representation_height = true;
-    adaptation_set.SetIntegerAttribute("height", *video_heights_.begin());
+    if (!adaptation_set.SetIntegerAttribute("height", *video_heights_.begin()))
+      return base::nullopt;
   } else if (video_heights_.size() > 1) {
-    adaptation_set.SetIntegerAttribute("maxHeight", *video_heights_.rbegin());
+    if (!adaptation_set.SetIntegerAttribute("maxHeight",
+                                            *video_heights_.rbegin())) {
+      return base::nullopt;
+    }
   }
 
   if (video_frame_rates_.size() == 1) {
     suppress_representation_frame_rate = true;
-    adaptation_set.SetStringAttribute("frameRate",
-                                      video_frame_rates_.begin()->second);
+    if (!adaptation_set.SetStringAttribute(
+            "frameRate", video_frame_rates_.begin()->second)) {
+      return base::nullopt;
+    }
   } else if (video_frame_rates_.size() > 1) {
-    adaptation_set.SetStringAttribute("maxFrameRate",
-                                      video_frame_rates_.rbegin()->second);
+    if (!adaptation_set.SetStringAttribute(
+            "maxFrameRate", video_frame_rates_.rbegin()->second)) {
+      return base::nullopt;
+    }
   }
 
   // Note: must be checked before checking segments_aligned_ (below). So that
@@ -281,52 +297,67 @@ xml::scoped_xml_ptr<xmlNode> AdaptationSet::GetXml() {
   }
 
   if (segments_aligned_ == kSegmentAlignmentTrue) {
-    adaptation_set.SetStringAttribute(
-        mpd_options_.dash_profile == DashProfile::kOnDemand
-            ? "subsegmentAlignment"
-            : "segmentAlignment",
-        "true");
+    if (!adaptation_set.SetStringAttribute(
+            mpd_options_.dash_profile == DashProfile::kOnDemand
+                ? "subsegmentAlignment"
+                : "segmentAlignment",
+            "true")) {
+      return base::nullopt;
+    }
   }
 
-  if (picture_aspect_ratio_.size() == 1)
-    adaptation_set.SetStringAttribute("par", *picture_aspect_ratio_.begin());
+  if (picture_aspect_ratio_.size() == 1 &&
+      !adaptation_set.SetStringAttribute("par",
+                                         *picture_aspect_ratio_.begin())) {
+    return base::nullopt;
+  }
 
   if (!adaptation_set.AddContentProtectionElements(
           content_protection_elements_)) {
-    return xml::scoped_xml_ptr<xmlNode>();
+    return base::nullopt;
   }
 
   std::string trick_play_reference_ids;
   for (const AdaptationSet* adaptation_set : trick_play_references_) {
+    // Should be a whitespace-separated list, see DASH-IOP 3.2.9.
     if (!trick_play_reference_ids.empty())
-      trick_play_reference_ids += ',';
+      trick_play_reference_ids += ' ';
     CHECK(adaptation_set->has_id());
     trick_play_reference_ids += std::to_string(adaptation_set->id());
   }
-  if (!trick_play_reference_ids.empty()) {
-    adaptation_set.AddEssentialProperty(
-        "http://dashif.org/guidelines/trickmode", trick_play_reference_ids);
+  if (!trick_play_reference_ids.empty() &&
+      !adaptation_set.AddEssentialProperty(
+          "http://dashif.org/guidelines/trickmode", trick_play_reference_ids)) {
+    return base::nullopt;
   }
 
   std::string switching_ids;
   for (const AdaptationSet* adaptation_set : switchable_adaptation_sets_) {
+    // Should be a comma-separated list, see DASH-IOP 3.8.
     if (!switching_ids.empty())
       switching_ids += ',';
     CHECK(adaptation_set->has_id());
     switching_ids += std::to_string(adaptation_set->id());
   }
-  if (!switching_ids.empty()) {
-    adaptation_set.AddSupplementalProperty(
-        "urn:mpeg:dash:adaptation-set-switching:2016", switching_ids);
+  if (!switching_ids.empty() &&
+      !adaptation_set.AddSupplementalProperty(
+          "urn:mpeg:dash:adaptation-set-switching:2016", switching_ids)) {
+    return base::nullopt;
   }
 
   for (const AdaptationSet::Accessibility& accessibility : accessibilities_) {
-    adaptation_set.AddAccessibilityElement(accessibility.scheme,
-                                           accessibility.value);
+    if (!adaptation_set.AddAccessibilityElement(accessibility.scheme,
+                                                accessibility.value)) {
+      return base::nullopt;
+    }
   }
 
-  for (AdaptationSet::Role role : roles_)
-    adaptation_set.AddRoleElement("urn:mpeg:dash:role:2011", RoleToText(role));
+  for (AdaptationSet::Role role : roles_) {
+    if (!adaptation_set.AddRoleElement("urn:mpeg:dash:role:2011",
+                                       RoleToText(role))) {
+      return base::nullopt;
+    }
+  }
 
   for (const auto& representation_pair : representation_map_) {
     const auto& representation = representation_pair.second;
@@ -336,12 +367,12 @@ xml::scoped_xml_ptr<xmlNode> AdaptationSet::GetXml() {
       representation->SuppressOnce(Representation::kSuppressHeight);
     if (suppress_representation_frame_rate)
       representation->SuppressOnce(Representation::kSuppressFrameRate);
-    xml::scoped_xml_ptr<xmlNode> child(representation->GetXml());
-    if (!child || !adaptation_set.AddChild(std::move(child)))
-      return xml::scoped_xml_ptr<xmlNode>();
+    auto child = representation->GetXml();
+    if (!child || !adaptation_set.AddChild(std::move(*child)))
+      return base::nullopt;
   }
 
-  return adaptation_set.PassScopedPtr();
+  return std::move(adaptation_set);
 }
 
 void AdaptationSet::ForceSetSegmentAlignment(bool segment_alignment) {
@@ -362,8 +393,8 @@ void AdaptationSet::AddAdaptationSetSwitching(
 // muxer so one might run faster than others). To be clear, for dynamic MPD, all
 // Representations should be added before a segment is added.
 void AdaptationSet::OnNewSegmentForRepresentation(uint32_t representation_id,
-                                                  uint64_t start_time,
-                                                  uint64_t duration) {
+                                                  int64_t start_time,
+                                                  int64_t duration) {
   if (mpd_options_.mpd_type == MpdType::kDynamic) {
     CheckDynamicSegmentAlignment(representation_id, start_time, duration);
   } else {
@@ -373,8 +404,8 @@ void AdaptationSet::OnNewSegmentForRepresentation(uint32_t representation_id,
 }
 
 void AdaptationSet::OnSetFrameRateForRepresentation(uint32_t representation_id,
-                                                    uint32_t frame_duration,
-                                                    uint32_t timescale) {
+                                                    int32_t frame_duration,
+                                                    int32_t timescale) {
   RecordFrameRate(frame_duration, timescale);
 }
 
@@ -449,14 +480,14 @@ void AdaptationSet::UpdateFromMediaInfo(const MediaInfo& media_info) {
 // But since this is unlikely to happen in the packager (and to save
 // computation), this isn't handled at the moment.
 void AdaptationSet::CheckDynamicSegmentAlignment(uint32_t representation_id,
-                                                 uint64_t start_time,
-                                                 uint64_t /* duration */) {
+                                                 int64_t start_time,
+                                                 int64_t /* duration */) {
   if (segments_aligned_ == kSegmentAlignmentFalse ||
       force_set_segment_alignment_) {
     return;
   }
 
-  std::list<uint64_t>& current_representation_start_times =
+  std::list<int64_t>& current_representation_start_times =
       representation_segment_start_times_[representation_id];
   current_representation_start_times.push_back(start_time);
   // There's no way to detemine whether the segments are aligned if some
@@ -465,10 +496,10 @@ void AdaptationSet::CheckDynamicSegmentAlignment(uint32_t representation_id,
     return;
 
   DCHECK(!current_representation_start_times.empty());
-  const uint64_t expected_start_time =
+  const int64_t expected_start_time =
       current_representation_start_times.front();
   for (const auto& key_value : representation_segment_start_times_) {
-    const std::list<uint64_t>& representation_start_time = key_value.second;
+    const std::list<int64_t>& representation_start_time = key_value.second;
     // If there are no entries in a list, then there is no way for the
     // segment alignment status to change.
     // Note that it can be empty because entries get deleted below.
@@ -489,7 +520,7 @@ void AdaptationSet::CheckDynamicSegmentAlignment(uint32_t representation_id,
   segments_aligned_ = kSegmentAlignmentTrue;
 
   for (auto& key_value : representation_segment_start_times_) {
-    std::list<uint64_t>& representation_start_time = key_value.second;
+    std::list<int64_t>& representation_start_time = key_value.second;
     representation_start_time.pop_front();
   }
 }
@@ -511,7 +542,7 @@ void AdaptationSet::CheckStaticSegmentAlignment() {
   // This is not the most efficient implementation to compare the values
   // because expected_time_line is compared against all other time lines, but
   // probably the most readable.
-  const std::list<uint64_t>& expected_time_line =
+  const std::list<int64_t>& expected_time_line =
       representation_segment_start_times_.begin()->second;
 
   bool all_segment_time_line_same_length = true;
@@ -519,13 +550,13 @@ void AdaptationSet::CheckStaticSegmentAlignment() {
   RepresentationTimeline::const_iterator it =
       representation_segment_start_times_.begin();
   for (++it; it != representation_segment_start_times_.end(); ++it) {
-    const std::list<uint64_t>& other_time_line = it->second;
+    const std::list<int64_t>& other_time_line = it->second;
     if (expected_time_line.size() != other_time_line.size()) {
       all_segment_time_line_same_length = false;
     }
 
-    const std::list<uint64_t>* longer_list = &other_time_line;
-    const std::list<uint64_t>* shorter_list = &expected_time_line;
+    const std::list<int64_t>* longer_list = &other_time_line;
+    const std::list<int64_t>* shorter_list = &expected_time_line;
     if (expected_time_line.size() > other_time_line.size()) {
       shorter_list = &other_time_line;
       longer_list = &expected_time_line;
@@ -556,8 +587,7 @@ void AdaptationSet::CheckStaticSegmentAlignment() {
 
 // Since all AdaptationSet cares about is the maxFrameRate, representation_id
 // is not passed to this method.
-void AdaptationSet::RecordFrameRate(uint32_t frame_duration,
-                                    uint32_t timescale) {
+void AdaptationSet::RecordFrameRate(int32_t frame_duration, int32_t timescale) {
   if (frame_duration == 0) {
     LOG(ERROR) << "Frame duration is 0 and cannot be set.";
     return;

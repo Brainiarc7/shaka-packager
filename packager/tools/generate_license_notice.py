@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 #
 # Copyright 2018 Google Inc. All rights reserved.
 #
@@ -116,9 +116,9 @@ def GenerateLicenseNotice(output_dir, output_license_file_name):
   license_files.sort()
 
   if output_license_file_name:
-    print 'Num License Files: {}\n'.format(len(license_files))
+    print('Num License Files: {}\n'.format(len(license_files)))
     for license_file in license_files:
-      print license_file
+      print(license_file)
 
   # Include the main license file.
   content = _ReadFile(os.path.join(packager_dir, os.pardir, 'LICENSE'))
@@ -134,11 +134,11 @@ def GenerateLicenseNotice(output_dir, output_license_file_name):
 
   if output_dir:
     cc_file_path = os.path.join(output_dir, 'license_notice.cc')
-    with open(cc_file_path, 'w') as output:
+    with open(cc_file_path, 'w', encoding='utf8') as output:
       output.write(CC_FILE_TEMPLATE.format(content_array_text))
 
     h_file_path = os.path.join(output_dir, 'license_notice.h')
-    with open(h_file_path, 'w') as output:
+    with open(h_file_path, 'w', encoding='utf8') as output:
       output.write(H_FILE_TEMPLATE.format(len(content)))
 
 

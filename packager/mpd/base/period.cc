@@ -57,6 +57,8 @@ AdaptationSet::Role RoleFromString(const std::string& role_str) {
     return AdaptationSet::Role::kRoleCommentary;
   if (role_str == "dub")
     return AdaptationSet::Role::kRoleDub;
+  if (role_str == "description")
+    return AdaptationSet::Role::kRoleDescription;
   return AdaptationSet::Role::kRoleUnknown;
 }
 
@@ -120,7 +122,7 @@ AdaptationSet* Period::GetOrCreateAdaptationSet(
   return adaptation_set_ptr;
 }
 
-xml::scoped_xml_ptr<xmlNode> Period::GetXml(bool output_period_duration) {
+base::Optional<xml::XmlNode> Period::GetXml(bool output_period_duration) {
   adaptation_sets_.sort(
       [](const std::unique_ptr<AdaptationSet>& adaptation_set_a,
          const std::unique_ptr<AdaptationSet>& adaptation_set_b) {
@@ -134,22 +136,49 @@ xml::scoped_xml_ptr<xmlNode> Period::GetXml(bool output_period_duration) {
   xml::XmlNode period("Period");
 
   // Required for 'dynamic' MPDs.
-  period.SetId(id_);
+  if (!period.SetId(id_))
+    return base::nullopt;
+
+  // Required for LL-DASH MPDs.
+  if (mpd_options_.mpd_params.low_latency_dash_mode) {
+    // Create ServiceDescription element.
+    xml::XmlNode service_description_node("ServiceDescription");
+    if (!service_description_node.SetIntegerAttribute("id", id_))
+      return base::nullopt;
+
+    // Insert Latency into ServiceDescription element.
+    xml::XmlNode latency_node("Latency");
+    uint64_t target_latency_ms =
+        mpd_options_.mpd_params.target_latency_seconds * 1000;
+    if (!latency_node.SetIntegerAttribute("target", target_latency_ms))
+      return base::nullopt;
+    if (!service_description_node.AddChild(std::move(latency_node)))
+      return base::nullopt;
+
+    // Insert ServiceDescription into Period element.
+    if (!period.AddChild(std::move(service_description_node)))
+      return base::nullopt;
+  }
+
   // Iterate thru AdaptationSets and add them to one big Period element.
   for (const auto& adaptation_set : adaptation_sets_) {
-    xml::scoped_xml_ptr<xmlNode> child(adaptation_set->GetXml());
-    if (!child || !period.AddChild(std::move(child)))
-      return nullptr;
+    auto child = adaptation_set->GetXml();
+    if (!child || !period.AddChild(std::move(*child)))
+      return base::nullopt;
   }
 
   if (output_period_duration) {
-    period.SetStringAttribute("duration",
-                              SecondsToXmlDuration(duration_seconds_));
+    if (!period.SetStringAttribute("duration",
+                                   SecondsToXmlDuration(duration_seconds_))) {
+      return base::nullopt;
+    }
   } else if (mpd_options_.mpd_type == MpdType::kDynamic) {
-    period.SetStringAttribute("start",
-                              SecondsToXmlDuration(start_time_in_seconds_));
+    if (!period.SetStringAttribute(
+            "start", SecondsToXmlDuration(start_time_in_seconds_))) {
+      return base::nullopt;
+    }
   }
-  return period.PassScopedPtr();
+  return period;
 }
 
 const std::list<AdaptationSet*> Period::GetAdaptationSets() const {

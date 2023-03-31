@@ -12,8 +12,8 @@
 
 namespace {
 
-// Timestamps are represented in double in WebM. Convert to uint64_t in us.
-const uint32_t kWebMTimeScale = 1000000u;
+// Timestamps are represented in double in WebM. Convert to int64_t in us.
+const int32_t kWebMTimeScale = 1000000;
 
 }  // namespace
 
@@ -161,11 +161,15 @@ VPCodecConfigurationRecord WebMVideoClient::GetVpCodecConfig(
 }
 
 WebMParserClient* WebMVideoClient::OnListStart(int id) {
-  return id == kWebMIdColor ? this : WebMParserClient::OnListStart(id);
+  return id == kWebMIdColor || id == kWebMIdProjection
+             ? this
+             : WebMParserClient::OnListStart(id);
 }
 
 bool WebMVideoClient::OnListEnd(int id) {
-  return id == kWebMIdColor ? true : WebMParserClient::OnListEnd(id);
+  return id == kWebMIdColor || id == kWebMIdProjection
+             ? true
+             : WebMParserClient::OnListEnd(id);
 }
 
 bool WebMVideoClient::OnUInt(int id, int64_t val) {
@@ -232,6 +236,9 @@ bool WebMVideoClient::OnUInt(int id, int64_t val) {
     case kWebMIdColorMaxCLL:
     case kWebMIdColorMaxFALL:
       NOTIMPLEMENTED() << "HDR is not supported yet.";
+      return true;
+    case kWebMIdProjectionType:
+      LOG(WARNING) << "Ignoring ProjectionType with value " << val;
       return true;
     default:
       return true;

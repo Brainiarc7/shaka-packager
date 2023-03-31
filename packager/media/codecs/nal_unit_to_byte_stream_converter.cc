@@ -242,6 +242,9 @@ bool NalUnitToByteStreamConverter::Initialize(
       buffer_writer.AppendArray(kNaluStartCode, arraysize(kNaluStartCode));
       AppendNalu(nalu, nalu_length_size_, !kEscapeData, &buffer_writer);
       found_pps = true;
+    } else if (nalu.type() == Nalu::H264NaluType::H264_SPSExtension) {
+      buffer_writer.AppendArray(kNaluStartCode, arraysize(kNaluStartCode));
+      AppendNalu(nalu, nalu_length_size_, !kEscapeData, &buffer_writer);
     }
   }
   if (!found_sps || !found_pps) {
@@ -313,12 +316,14 @@ bool NalUnitToByteStreamConverter::ConvertUnitToByteStreamWithSubsamples(
         break;
       case Nalu::H264_SPS:
         FALLTHROUGH_INTENDED;
+      case Nalu::H264_SPSExtension:
+        FALLTHROUGH_INTENDED;
       case Nalu::H264_PPS: {
         // Also write this SPS/PPS if it is not the same as SPS/PPS in decoder
         // configuration, which is already written.
         //
         // For more information see:
-        //  - github.com/google/shaka-packager/issues/327
+        //  - github.com/shaka-project/shaka-packager/issues/327
         //  - ISO/IEC 14496-15 5.4.5 Sync Sample
         //
         // TODO(kqyang): Parse sample data to figure out which SPS/PPS the

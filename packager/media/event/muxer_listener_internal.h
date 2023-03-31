@@ -29,7 +29,7 @@ namespace internal {
 /// @return true on success, false otherwise.
 bool GenerateMediaInfo(const MuxerOptions& muxer_options,
                        const StreamInfo& stream_info,
-                       uint32_t reference_time_scale_,
+                       int32_t reference_time_scale_,
                        MuxerListener::ContainerType container_type,
                        MediaInfo* media_info);
 
@@ -42,6 +42,7 @@ bool IsMediaInfoCompatible(const MediaInfo& media_info1,
 /// @return true on success, false otherwise.
 bool SetVodInformation(const MuxerListener::MediaRanges& media_ranges,
                        float duration_seconds,
+                       bool use_segment_list,
                        MediaInfo* media_info);
 
 /// @param protection_scheme specifies the protection scheme: 'cenc', 'cens',

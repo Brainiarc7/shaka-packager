@@ -8,7 +8,7 @@
 
 #include "packager/base/strings/stringprintf.h"
 #include "packager/media/base/text_sample.h"
-#include "packager/media/formats/webvtt/webvtt_timestamp.h"
+#include "packager/media/formats/webvtt/webvtt_utils.h"
 
 namespace shaka {
 namespace media {
@@ -17,9 +17,8 @@ const char* kHeader = "WEBVTT\n";
 const int kTsTimescale = 90000;
 }  // namespace
 
-WebVttFileBuffer::WebVttFileBuffer(
-    uint32_t transport_stream_timestamp_offset_ms,
-    const std::string& style_region_config)
+WebVttFileBuffer::WebVttFileBuffer(int32_t transport_stream_timestamp_offset_ms,
+                                   const std::string& style_region_config)
     : transport_stream_timestamp_offset_(transport_stream_timestamp_offset_ms *
                                          kTsTimescale / 1000),
       style_region_config_(style_region_config) {
@@ -61,23 +60,24 @@ void WebVttFileBuffer::Append(const TextSample& sample) {
   buffer_.append(MsToWebVttTimestamp(sample.start_time()));
   buffer_.append(" --> ");
   buffer_.append(MsToWebVttTimestamp(sample.EndTime()));
-
-  // Settings are optional
-  if (sample.settings().length()) {
+  const std::string settings = WebVttSettingsToString(sample.settings());
+  if (!settings.empty()) {
     buffer_.append(" ");
-    buffer_.append(sample.settings());
+    buffer_.append(settings);
   }
   buffer_.append("\n");  // end of time & settings
 
-  buffer_.append(sample.payload());
+  buffer_.append(WebVttFragmentToString(sample.body()));
   buffer_.append("\n");  // end of payload
   buffer_.append("\n");  // end of sample
 }
 
-bool WebVttFileBuffer::WriteTo(File* file) {
+bool WebVttFileBuffer::WriteTo(File* file, uint64_t* size) {
   DCHECK(file);
   DCHECK_GT(buffer_.size(), 0u) << "The buffer should at least have a header";
 
+  if (size)
+    *size = buffer_.size();
   const int written = file->Write(buffer_.c_str(), buffer_.size());
   if (written < 0) {
     return false;

@@ -7,6 +7,7 @@
 #include "packager/media/formats/mp2t/program_map_table_writer.h"
 
 #include <algorithm>
+#include <limits>
 
 #include "packager/base/logging.h"
 #include "packager/media/base/buffer_writer.h"
@@ -261,6 +262,9 @@ bool ProgramMapTableWriter::ClearSegmentPmt(BufferWriter* writer) {
       case kCodecAAC:
         stream_type = TsStreamType::kAdtsAac;
         break;
+      case kCodecMP3:
+        stream_type = TsStreamType::kMpeg1Audio;
+        break;
       case kCodecAC3:
         stream_type = TsStreamType::kAc3;
         break;
@@ -313,6 +317,9 @@ bool AudioProgramMapTableWriter::WriteDescriptors(
   switch (codec()) {
     case kCodecAAC:
       fourcc = FOURCC_aacd;
+      break;
+    case kCodecMP3:
+      fourcc = FOURCC_mp3a;
       break;
     case kCodecAC3:
       fourcc = FOURCC_ac3d;

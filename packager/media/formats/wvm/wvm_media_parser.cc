@@ -112,14 +112,15 @@ WvmMediaParser::WvmMediaParser()
 WvmMediaParser::~WvmMediaParser() {}
 
 void WvmMediaParser::Init(const InitCB& init_cb,
-                          const NewSampleCB& new_sample_cb,
+                          const NewMediaSampleCB& new_media_sample_cb,
+                          const NewTextSampleCB& new_text_sample_cb,
                           KeySource* decryption_key_source) {
   DCHECK(!is_initialized_);
   DCHECK(!init_cb.is_null());
-  DCHECK(!new_sample_cb.is_null());
+  DCHECK(!new_media_sample_cb.is_null());
   decryption_key_source_ = decryption_key_source;
   init_cb_ = init_cb;
-  new_sample_cb_ = new_sample_cb;
+  new_sample_cb_ = new_media_sample_cb;
 }
 
 bool WvmMediaParser::Parse(const uint8_t* buf, int size) {
@@ -572,10 +573,10 @@ bool WvmMediaParser::ParseIndexEntry() {
       return false;
     }
 
-    uint64_t track_duration = 0;
+    int64_t track_duration = 0;
     uint32_t trick_play_factor = 0;
     uint32_t sampling_frequency = kDefaultSamplingFrequency;
-    uint32_t time_scale = kMpeg2ClockRate;
+    int32_t time_scale = kMpeg2ClockRate;
     uint16_t video_width = 0;
     uint16_t video_height = 0;
     uint32_t pixel_width = 0;

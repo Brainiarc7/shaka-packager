@@ -56,7 +56,8 @@ class WvmMediaParser : public MediaParser {
   /// @name MediaParser implementation overrides.
   /// @{
   void Init(const InitCB& init_cb,
-            const NewSampleCB& new_sample_cb,
+            const NewMediaSampleCB& new_media_sample_cb,
+            const NewTextSampleCB& new_text_sample_cb,
             KeySource* decryption_key_source) override;
   bool Flush() override WARN_UNUSED_RESULT;
   bool Parse(const uint8_t* buf, int size) override WARN_UNUSED_RESULT;
@@ -216,7 +217,7 @@ class WvmMediaParser : public MediaParser {
 
   // List of callbacks.t
   InitCB init_cb_;
-  NewSampleCB new_sample_cb_;
+  NewMediaSampleCB new_sample_cb_;
 
   // Whether |init_cb_| has been invoked.
   bool is_initialized_;
@@ -233,8 +234,8 @@ class WvmMediaParser : public MediaParser {
   uint8_t pes_flags_2_;
   uint8_t prev_pes_flags_1_;
   size_t pes_header_data_bytes_;
-  uint64_t timestamp_;
-  uint64_t pts_;
+  int64_t timestamp_;
+  int64_t pts_;
   uint64_t dts_;
   uint8_t index_program_id_;
   std::shared_ptr<MediaSample> media_sample_;

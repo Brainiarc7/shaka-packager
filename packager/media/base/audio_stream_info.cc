@@ -37,28 +37,59 @@ std::string AudioCodecToString(Codec codec) {
       return "DTS+";
     case kCodecEAC3:
       return "EAC3";
+    case kCodecAC4:
+      return "AC4";
     case kCodecFlac:
       return "FLAC";
     case kCodecOpus:
       return "Opus";
     case kCodecVorbis:
       return "Vorbis";
+    case kCodecMP3:
+      return "MP3";
     default:
       NOTIMPLEMENTED() << "Unknown Audio Codec: " << codec;
       return "UnknownCodec";
   }
 }
+
+FourCC CodecToFourCC(Codec codec) {
+  switch (codec) {
+    case kCodecMha1:
+      return FOURCC_mha1;
+    case kCodecMhm1:
+      return FOURCC_mhm1;
+    default:
+      return FOURCC_NULL;
+  }
+}
 }  // namespace
 
-AudioStreamInfo::AudioStreamInfo(
-    int track_id, uint32_t time_scale, uint64_t duration, Codec codec,
-    const std::string& codec_string, const uint8_t* codec_config,
-    size_t codec_config_size, uint8_t sample_bits, uint8_t num_channels,
-    uint32_t sampling_frequency, uint64_t seek_preroll_ns,
-    uint64_t codec_delay_ns, uint32_t max_bitrate, uint32_t avg_bitrate,
-    const std::string& language, bool is_encrypted)
-    : StreamInfo(kStreamAudio, track_id, time_scale, duration, codec,
-                 codec_string, codec_config, codec_config_size, language,
+AudioStreamInfo::AudioStreamInfo(int track_id,
+                                 int32_t time_scale,
+                                 int64_t duration,
+                                 Codec codec,
+                                 const std::string& codec_string,
+                                 const uint8_t* codec_config,
+                                 size_t codec_config_size,
+                                 uint8_t sample_bits,
+                                 uint8_t num_channels,
+                                 uint32_t sampling_frequency,
+                                 uint64_t seek_preroll_ns,
+                                 uint64_t codec_delay_ns,
+                                 uint32_t max_bitrate,
+                                 uint32_t avg_bitrate,
+                                 const std::string& language,
+                                 bool is_encrypted)
+    : StreamInfo(kStreamAudio,
+                 track_id,
+                 time_scale,
+                 duration,
+                 codec,
+                 codec_string,
+                 codec_config,
+                 codec_config_size,
+                 language,
                  is_encrypted),
       sample_bits_(sample_bits),
       num_channels_(num_channels),
@@ -119,12 +150,33 @@ std::string AudioStreamInfo::GetCodecString(Codec codec,
       return "dts+";
     case kCodecEAC3:
       return "ec-3";
+    case kCodecAC4:
+      // ETSI TS 103 190-2 Digital Audio Compression (AC-4) Standard; Part 2:
+      // Immersive and personalized audio E.13. audio_object_type is composed of
+      // bitstream_version (3bits), presentation_version (2bits) and
+      // mdcompat (3bits).
+      return base::StringPrintf(
+        "ac-4.%02d.%02d.%02d", (audio_object_type & 0xE0) >> 5,
+        (audio_object_type & 0x18) >> 3, audio_object_type & 0x7);
     case kCodecFlac:
       return "flac";
     case kCodecOpus:
       return "opus";
+    case kCodecMP3:
+      return "mp3";
     case kCodecVorbis:
       return "vorbis";
+    case kCodecMha1:
+    case kCodecMhm1:
+      // The signalling of the codecs parameters is according to RFC6381 [11]
+      //   and ISO/IEC 23008-3 clause 21 [7].
+      // The value consists of the following two parts separated by a dot:
+      //  - the sample entry 4CC code ('mha1', 'mha2', 'mhm1', 'mhm2')
+      //  - ‘0x’ followed by the hex value of the profile-levelid, as defined 
+      //      in in ISO/IEC 23008-3 [7]
+      return base::StringPrintf("%s.0x%02x", 
+                                FourCCToString(CodecToFourCC(codec)).c_str(), 
+                                audio_object_type);
     default:
       NOTIMPLEMENTED() << "Codec: " << codec;
       return "unknown";

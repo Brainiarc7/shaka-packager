@@ -43,7 +43,34 @@ const char kExpectedDefaultMediaInfo[] =
     "container_type: 1\n"
     "media_file_name: 'test_output_file_name.mp4'\n"
     "media_duration_seconds: 10.5\n";
-const uint32_t kDefaultReferenceTimeScale = 1000u;
+
+const char kExpectedDefaultMediaInfoSubsegmentRange[] =
+    "video_info {\n"
+    "  codec: 'avc1.010101'\n"
+    "  width: 720\n"
+    "  height: 480\n"
+    "  time_scale: 10\n"
+    "  pixel_width: 1\n"
+    "  pixel_height: 1\n"
+    "}\n"
+    "init_range {\n"
+    "  begin: 0\n"
+    "  end: 120\n"
+    "}\n"
+    "index_range {\n"
+    "  begin: 121\n"
+    "  end: 221\n"
+    "}\n"
+    "reference_time_scale: 1000\n"
+    "container_type: 1\n"
+    "media_file_name: 'test_output_file_name.mp4'\n"
+    "media_duration_seconds: 10.5\n"
+    "subsegment_ranges {\n"
+    "  begin: 222\n"
+    "  end: 9999\n"
+    "}\n";
+
+const int32_t kDefaultReferenceTimeScale = 1000;
 
 // Struct that gets passed for to CreateVideoStreamInfo() to create a
 // StreamInfo instance. Useful for generating multiple VideoStreamInfo with
@@ -52,8 +79,8 @@ struct VideoStreamInfoParameters {
   VideoStreamInfoParameters();
   ~VideoStreamInfoParameters();
   int track_id;
-  uint32_t time_scale;
-  uint64_t duration;
+  int32_t time_scale;
+  int64_t duration;
   Codec codec;
   std::string codec_string;
   std::string language;
@@ -68,8 +95,8 @@ struct VideoStreamInfoParameters {
 
 struct OnNewSegmentParameters {
   std::string file_name;
-  uint64_t start_time;
-  uint64_t duration;
+  int64_t start_time;
+  int64_t duration;
   uint64_t segment_file_size;
 };
 

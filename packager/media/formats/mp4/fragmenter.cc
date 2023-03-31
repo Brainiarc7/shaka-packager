@@ -90,8 +90,7 @@ Status Fragmenter::AddSample(const MediaSample& sample) {
 
   if (stream_info_->stream_type() == StreamType::kStreamVideo &&
       sample.is_key_frame()) {
-    key_frame_infos_.push_back(
-        {static_cast<uint64_t>(pts), data_->Size(), sample.data_size()});
+    key_frame_infos_.push_back({pts, data_->Size(), sample.data_size()});
   }
 
   data_->AppendArray(sample.data(), sample.data_size());
@@ -157,6 +156,9 @@ Status Fragmenter::InitializeFragment(int64_t first_sample_dts) {
 }
 
 Status Fragmenter::FinalizeFragment() {
+  if (!fragment_initialized_)
+    return Status::OK;
+
   if (stream_info_->is_encrypted()) {
     Status status = FinalizeFragmentForEncryption();
     if (!status.ok())

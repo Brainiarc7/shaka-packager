@@ -75,8 +75,8 @@ const int kTestAudioFrameDefaultDurationInMs = 13;
 const int kTestVideoFrameDefaultDurationInMs = 17;
 
 // Constants for AudioStreamInfo and VideoStreamInfo. Most are not used.
-const uint32_t kTimeScale = 1000000u;
-const uint64_t kDuration = 10000000u;
+const int32_t kTimeScale = 1000000;
+const int64_t kDuration = 10000000;
 const char kCodecString[] = "codec_string";
 const char kLanguage[] = "eng";
 const uint8_t kBitsPerSample = 8u;
@@ -92,7 +92,7 @@ const uint16_t kHeight = 180u;
 const uint32_t kPixelWidth = 1u;
 const uint32_t kPixelHeight = 1u;
 const uint8_t kTransferCharacteristics = 0;
-const int16_t kTrickPlayFactor = 0u;
+const int16_t kTrickPlayFactor = 0;
 const uint8_t kNaluLengthSize = 0u;
 
 // Test duration defaults must differ from parser estimation defaults to know
@@ -377,8 +377,7 @@ class WebMClusterParserTest : public testing::Test {
     streams_from_init_event_ = stream_info;
   }
 
-  bool NewSampleEvent(uint32_t track_id,
-                      const std::shared_ptr<MediaSample>& sample) {
+  bool NewSampleEvent(uint32_t track_id, std::shared_ptr<MediaSample> sample) {
     switch (track_id) {
       case kAudioTrackNum:
         audio_buffers_.push_back(sample);

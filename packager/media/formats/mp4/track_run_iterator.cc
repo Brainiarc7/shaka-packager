@@ -26,8 +26,8 @@ namespace {
 const int64_t kInvalidOffset = std::numeric_limits<int64_t>::max();
 
 int64_t Rescale(int64_t time_in_old_scale,
-                uint32_t old_scale,
-                uint32_t new_scale) {
+                int32_t old_scale,
+                int32_t new_scale) {
   return (static_cast<double>(time_in_old_scale) / old_scale) * new_scale;
 }
 
@@ -703,7 +703,7 @@ int64_t TrackRunIterator::GetTimestampAdjustment(const Movie& movie,
         LOG(WARNING)
             << "Adjusting timestamps by " << -composition_offset
             << ". Please file a bug to "
-               "https://github.com/google/shaka-packager/issues if you "
+               "https://github.com/shaka-project/shaka-packager/issues if you "
                "do not think it is right or if you are seeing any problems.";
         timestamp_adjustment = -composition_offset;
       }

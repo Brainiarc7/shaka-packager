@@ -35,7 +35,7 @@ class EsParserH26x : public EsParser {
 
   // EsParser implementation overrides.
   bool Parse(const uint8_t* buf, int size, int64_t pts, int64_t dts) override;
-  void Flush() override;
+  bool Flush() override;
   void Reset() override;
 
  protected:
@@ -96,6 +96,8 @@ class EsParserH26x : public EsParser {
                  int access_unit_size,
                  bool is_key_frame,
                  int pps_id);
+  // Calculates frame duration based on SPS frame data
+  virtual int64_t CalculateSampleDuration(int pps_id) = 0;
 
   // Callback to pass the frames.
   EmitSampleCB emit_sample_cb_;
@@ -127,7 +129,8 @@ class EsParserH26x : public EsParser {
 
   // Frame for which we do not yet have a duration.
   std::shared_ptr<MediaSample> pending_sample_;
-  uint64_t pending_sample_duration_ = 0;
+  int pending_sample_pps_id_ = -1;
+  int64_t pending_sample_duration_ = 0;
 
   // Indicates whether waiting for first key frame.
   bool waiting_for_key_frame_ = true;

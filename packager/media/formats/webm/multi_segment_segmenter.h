@@ -8,6 +8,7 @@
 #define PACKAGER_MEDIA_FORMATS_WEBM_MULTI_SEGMENT_SEGMENTER_H_
 
 #include <memory>
+
 #include "packager/media/formats/webm/mkv_writer.h"
 #include "packager/media/formats/webm/segmenter.h"
 #include "packager/status.h"
@@ -28,8 +29,8 @@ class MultiSegmentSegmenter : public Segmenter {
 
   /// @name Segmenter implementation overrides.
   /// @{
-  Status FinalizeSegment(uint64_t start_timestamp,
-                         uint64_t duration_timestamp,
+  Status FinalizeSegment(int64_t start_timestamp,
+                         int64_t duration_timestamp,
                          bool is_subsegment) override;
   bool GetInitRangeStartAndEnd(uint64_t* start, uint64_t* end) override;
   bool GetIndexRangeStartAndEnd(uint64_t* start, uint64_t* end) override;
@@ -43,10 +44,11 @@ class MultiSegmentSegmenter : public Segmenter {
 
  private:
   // Segmenter implementation overrides.
-  Status NewSegment(uint64_t start_timestamp, bool is_subsegment) override;
+  Status NewSegment(int64_t start_timestamp, bool is_subsegment) override;
 
   std::unique_ptr<MkvWriter> writer_;
   uint32_t num_segment_;
+  std::string temp_file_name_;
 
   DISALLOW_COPY_AND_ASSIGN(MultiSegmentSegmenter);
 };

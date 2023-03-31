@@ -18,6 +18,7 @@
 #include "packager/media/base/text_stream_info.h"
 #include "packager/media/base/video_stream_info.h"
 #include "packager/media/codecs/ec3_audio_util.h"
+#include "packager/media/codecs/ac4_audio_util.h"
 #include "packager/mpd/base/media_info.pb.h"
 
 using ::google::protobuf::util::MessageDifferencer;
@@ -120,16 +121,53 @@ void AddAudioInfo(const AudioStreamInfo* audio_stream_info,
       LOG(ERROR) << "Failed to calculate EC3 channel map.";
       return;
     }
-    audio_info->mutable_codec_specific_data()->set_ec3_channel_map(
-        ec3_channel_map);
+    auto* codec_data = audio_info->mutable_codec_specific_data();
+    codec_data->set_channel_mask(ec3_channel_map);
+    uint32_t ec3_channel_mpeg_value;
+    if (!CalculateEC3ChannelMPEGValue(codec_config, &ec3_channel_mpeg_value)) {
+        LOG(ERROR) << "Failed to calculate EC3 channel configuration "
+                   << "descriptor value with MPEG scheme.";
+        return;
+    }
+    codec_data->set_channel_mpeg_value(ec3_channel_mpeg_value);
+    uint32_t ec3_joc_complexity = 0;
+    if (!GetEc3JocComplexity(codec_config, &ec3_joc_complexity)) {
+      LOG(ERROR) << "Failed to obtain DD+JOC Information.";
+      return;
+    }
+    codec_data->set_ec3_joc_complexity(ec3_joc_complexity);
+  }
+
+  if (audio_stream_info->codec() == kCodecAC4) {
+    uint32_t ac4_channel_mask;
+    if (!CalculateAC4ChannelMask(codec_config, &ac4_channel_mask)) {
+      LOG(ERROR) << "Failed to calculate AC4 channel mask.";
+      return;
+    }
+    auto* codec_data = audio_info->mutable_codec_specific_data();
+    codec_data->set_channel_mask(ac4_channel_mask);
+    uint32_t ac4_channel_mpeg_value;
+    if (!CalculateAC4ChannelMPEGValue(codec_config, &ac4_channel_mpeg_value)) {
+      LOG(ERROR) << "Failed to calculate AC4 channel configuration "
+                 << "descriptor value with MPEG scheme.";
+      return;
+    }
+    codec_data->set_channel_mpeg_value(ac4_channel_mpeg_value);
+    bool ac4_ims_flag;
+    bool ac4_cbi_flag;
+    if (!GetAc4ImmersiveInfo(codec_config, &ac4_ims_flag, &ac4_cbi_flag)) {
+      LOG(ERROR) << "Failed to obtain AC4 IMS flag and CBI flag.";
+      return;
+    }
+    codec_data->set_ac4_ims_flag(ac4_ims_flag);
+    codec_data->set_ac4_cbi_flag(ac4_cbi_flag);
   }
 }
 
 void AddTextInfo(const TextStreamInfo& text_stream_info,
                  MediaInfo* media_info) {
-  // For now, set everything as subtitle.
+  // TODO(modmaker): Set kind.
   MediaInfo::TextInfo* text_info = media_info->mutable_text_info();
-  text_info->set_type(MediaInfo::TextInfo::SUBTITLE);
   text_info->set_codec(text_stream_info.codec_string());
   text_info->set_language(text_stream_info.language());
 }
@@ -188,15 +226,16 @@ MediaInfo GetCompatibleComparisonMediaInfo(const MediaInfo& media_info) {
 
 bool GenerateMediaInfo(const MuxerOptions& muxer_options,
                        const StreamInfo& stream_info,
-                       uint32_t reference_time_scale,
+                       int32_t reference_time_scale,
                        MuxerListener::ContainerType container_type,
                        MediaInfo* media_info) {
   DCHECK(media_info);
 
   SetMediaInfoMuxerOptions(muxer_options, media_info);
   SetMediaInfoStreamInfo(stream_info, media_info);
-  media_info->set_reference_time_scale(reference_time_scale);
   SetMediaInfoContainerType(container_type, media_info);
+  if (reference_time_scale > 0)
+    media_info->set_reference_time_scale(reference_time_scale);
   if (muxer_options.bandwidth > 0)
     media_info->set_bandwidth(muxer_options.bandwidth);
 
@@ -212,6 +251,7 @@ bool IsMediaInfoCompatible(const MediaInfo& media_info1,
 
 bool SetVodInformation(const MuxerListener::MediaRanges& media_ranges,
                        float duration_seconds,
+                       bool use_segment_lists,
                        MediaInfo* media_info) {
   DCHECK(media_info);
 
@@ -229,6 +269,12 @@ bool SetVodInformation(const MuxerListener::MediaRanges& media_ranges,
   if (media_ranges.index_range) {
     SetRange(media_ranges.index_range->start, media_ranges.index_range->end,
              media_info->mutable_index_range());
+  }
+
+  if (use_segment_lists) {
+    for (const auto& range : media_ranges.subsegment_ranges) {
+      SetRange(range.start, range.end, media_info->add_subsegment_ranges());
+    }
   }
 
   media_info->set_media_duration_seconds(duration_seconds);

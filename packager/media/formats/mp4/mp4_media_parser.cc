@@ -5,6 +5,7 @@
 #include "packager/media/formats/mp4/mp4_media_parser.h"
 
 #include <algorithm>
+#include <limits>
 
 #include "packager/base/callback.h"
 #include "packager/base/callback_helpers.h"
@@ -26,6 +27,7 @@
 #include "packager/media/codecs/avc_decoder_configuration_record.h"
 #include "packager/media/codecs/dovi_decoder_configuration_record.h"
 #include "packager/media/codecs/ec3_audio_util.h"
+#include "packager/media/codecs/ac4_audio_util.h"
 #include "packager/media/codecs/es_descriptor.h"
 #include "packager/media/codecs/hevc_decoder_configuration_record.h"
 #include "packager/media/codecs/vp_codec_configuration_record.h"
@@ -38,9 +40,9 @@ namespace media {
 namespace mp4 {
 namespace {
 
-uint64_t Rescale(uint64_t time_in_old_scale,
-                 uint32_t old_scale,
-                 uint32_t new_scale) {
+int64_t Rescale(int64_t time_in_old_scale,
+                int32_t old_scale,
+                int32_t new_scale) {
   return (static_cast<double>(time_in_old_scale) / old_scale) * new_scale;
 }
 
@@ -94,8 +96,14 @@ Codec FourCCToCodec(FourCC fourcc) {
       return kCodecAC3;
     case FOURCC_ec_3:
       return kCodecEAC3;
+    case FOURCC_ac_4:
+      return kCodecAC4;
     case FOURCC_fLaC:
       return kCodecFlac;
+    case FOURCC_mha1:
+      return kCodecMha1;
+    case FOURCC_mhm1:
+      return kCodecMhm1;
     default:
       return kUnknownCodec;
   }
@@ -176,16 +184,17 @@ MP4MediaParser::MP4MediaParser()
 MP4MediaParser::~MP4MediaParser() {}
 
 void MP4MediaParser::Init(const InitCB& init_cb,
-                          const NewSampleCB& new_sample_cb,
+                          const NewMediaSampleCB& new_media_sample_cb,
+                          const NewTextSampleCB& new_text_sample_cb,
                           KeySource* decryption_key_source) {
   DCHECK_EQ(state_, kWaitingForInit);
   DCHECK(init_cb_.is_null());
   DCHECK(!init_cb.is_null());
-  DCHECK(!new_sample_cb.is_null());
+  DCHECK(!new_media_sample_cb.is_null());
 
   ChangeState(kParsingBoxes);
   init_cb_ = init_cb;
-  new_sample_cb_ = new_sample_cb;
+  new_sample_cb_ = new_media_sample_cb;
   decryption_key_source_ = decryption_key_source;
   if (decryption_key_source)
     decryptor_source_.reset(new DecryptorSource(decryption_key_source));
@@ -378,10 +387,10 @@ bool MP4MediaParser::ParseMoov(BoxReader* reader) {
 
   for (std::vector<Track>::const_iterator track = moov_->tracks.begin();
        track != moov_->tracks.end(); ++track) {
-    const uint32_t timescale = track->media.header.timescale;
+    const int32_t timescale = track->media.header.timescale;
 
     // Calculate duration (based on timescale).
-    uint64_t duration = 0;
+    int64_t duration = 0;
     if (track->media.header.duration > 0) {
       duration = track->media.header.duration;
     } else if (moov_->extends.header.fragment_duration > 0) {
@@ -488,6 +497,16 @@ bool MP4MediaParser::ParseMoov(BoxReader* reader) {
           codec_config = entry.dec3.data;
           num_channels = static_cast<uint8_t>(GetEc3NumChannels(codec_config));
           break;
+        case FOURCC_ac_4:
+          codec_config = entry.dac4.data;
+          // Stop the process if have errors when parsing AC-4 dac4 box,
+          // bitstream version 0 (has beed deprecated) and contains multiple
+          // presentations in single AC-4 stream (only used for broadcast).
+          if (!GetAc4CodecInfo(codec_config, &audio_object_type)) {
+            LOG(ERROR) << "Failed to parse dac4.";
+            return false;
+          }
+          break;
         case FOURCC_fLaC:
           codec_config = entry.dfla.data;
           break;
@@ -495,6 +514,11 @@ bool MP4MediaParser::ParseMoov(BoxReader* reader) {
           codec_config = entry.dops.opus_identification_header;
           codec_delay_ns =
               entry.dops.preskip * kNanosecondsPerSecond / sampling_frequency;
+          break;
+        case FOURCC_mha1:
+        case FOURCC_mhm1:
+          codec_config = entry.mhac.data;
+          audio_object_type = entry.mhac.mpeg_h_3da_profile_level_indication;
           break;
         default:
           // Intentionally not to fail in the parser as there may be multiple

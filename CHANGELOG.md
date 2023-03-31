@@ -1,3 +1,109 @@
+## [2.6.1] - 2021-10-14
+### Fixed
+ - Fix crash in static-linked linux builds (#996)
+ - Update outdated Dockerfiles
+
+## [2.6.0] - 2021-09-07
+### Added
+ - Low latency DASH support (#979)
+ - Added MPEG-H support (mha1, mhm1) (#930, #952)
+
+### Fixed
+ - Workaround warning spam using http_file (#948)
+ - Fixed various python2/3 issues in the build
+ - Fixed builds with CC=clang CXX=clang++
+
+### Changed
+ - Added arm64 to the build matrix
+ - Make release binary names more consistent
+ - Produce static release executables on Linux (#978, #965)
+ - Stop using hermetic clang, libc++, etc
+   - "gclient sync" now runs 20-30% faster
+   - "ninja -C out/Release" now runs 5-13% faster
+   - No longer required:
+     - DEPOT_TOOLS_WIN_TOOLCHAIN environment variable
+     - MACOSX_DEPLOYMENT_TARGET environment variable
+     - clang=0 gyp variable
+     - host_clang=0 gyp variable
+     - clang_xcode=1 gyp variable
+     - use_allocator=none gyp variable
+     - use_experimental_allocator_shim=0 gyp variable
+
+
+## [2.5.1] - 2021-06-21
+### Added
+ - Add support for MSVS 2017 and 2019 (#867, #955)
+
+### Fixed
+ - Fix position of LA_URL in PlayReady headers (#961)
+ - Fix broken Dockerfile due to depot_tools update
+ - Fix shared_library builds on Windows (#318, #956, #957, #958)
+
+### Changed
+ - CI overhaul based on GitHub Actions (#336, #959)
+   - Migrated Appveyor and Travis integrations to GitHub Actions
+   - Added significant new release automation to build, test, and release on
+     GitHub, NPM, and Docker Hub
+
+### Doc
+ - Fix doc formatting for dash_only and hls_only (#954)
+
+
+## [2.5.0] - 2021-06-09
+### Added
+- Support HTTP PUT to upload packaging outputs to cloud (#149).
+- Support Dolby Vision backward compatible profiles (#341).
+- Support different IVs for each track (#543).
+- Support dash_only and hls_only parameters
+  (`dash_only=0|1`, `hls_only=0|1`) (#651).
+- [HLS] Allow custom EXT-X-MEDIA-SEQUENCE number (`--hls_media_sequence_number`)
+  (#691).
+- [MP4] Allow specifying protection pattern for pattern encryption
+  (`--crypt_byte_block`, `--skip_byte_block`) (#710).
+- [MP4] Allow write |mvex| before |trak| (`--mvex_before_trak`) (#711).
+- [DASH] Support signalling of last segment number
+  (`dash_add_last_segment_number_when_needed`) (#713).
+- [DASH] Allow adaptive switching between different codecs
+  (`--allow_codec_switching`) (#726).
+- [DASH] Include <mspr:pro> alongside to <cenc:pssh> for PlayReady (#743).
+- Support Dolby DD+JOC in DASH and HLS (#753).
+- Support AC-4 codec (#754).
+- Support inclusion of extra PlayReady header data
+  (`--playready_extra_header_data`) (#756).
+- Support MPEG-1 Audio in mpeg2ts I/O and packed-audio / mp4 output (#779).
+- Support more text input and output formats, including DVB-SUB input (#832) and
+  TTML in MP4 output (#87).
+- Support segment_list for DASH on-demand profile (`--dash_force_segment_list`).
+
+### Fixed
+- DASH / HLS spec compliance issues
+  - [HLS] Add support for independent segments tag (#564).
+  - [TS] Improve frame rate calculation for TS streams (#751).
+  - [MP4] Change major brand from isom to mp41 (#755).
+  - [MP4] Always set ES_ID to 0 when writing ES Descriptor (#755).
+  - Properly handle AVC profiles with SPS extension (#755).
+  - [HLS] Don't include FRAME-RATE in EXT-X-STREAM-INF (#816).
+  - [HLS] Fix missing FRAME-RATE in playlists with TS streams (#816).
+- [DASH] TrickPlay using separate trick play specific streams (#732).
+- Don't fail if input contents contain SampleGroupDescriptionBox with 0 entries
+  (#812).
+- [HLS] Fixes attributes for DVS tracks (#857).
+- Fix trick-mode property values (space instead of comma).
+- Properly handle SkipBytes with num_bytes as 0 (#875).
+- [MPEG-TS] Fix PCR reserved bits not being set correctly (#893).
+- [HLS] Explicitly signal the lack of CEA captions (#922).
+
+### Changed
+- Change AV1 cbcs to protect all bytes of decode_tile structure (#698).
+- [MP4] Allow not to generate 'sidx' box for single-segment too (#862).
+- [WebM] Ignore matroska projection metadata instead of fail parsing (#932).
+- Changed default HTTP UserAgent to ShakaPackager/<version> (#939).
+
+## [2.4.3] - 2020-08-04
+### Fixed
+- Fix playback issue of HEVC content with cbcs encryption in AVplayer (#717).
+- Fix possible incorrect resolutions with avc3 (#750).
+
 ## [2.4.2] - 2020-03-30
 ### Fixed
 - Fix truncation of timestamp to 32bits in segment file names for MPEG2-TS
@@ -509,27 +615,32 @@ First public release.
 - Added mpd_generator driver program to generate mpd file from packager generated
   intermediate files.
 
-[2.4.2]: https://github.com/google/shaka-packager/compare/v2.4.1...v2.4.2
-[2.4.1]: https://github.com/google/shaka-packager/compare/v2.4.0...v2.4.1
-[2.4.0]: https://github.com/google/shaka-packager/compare/v2.3.0...v2.4.0
-[2.3.0]: https://github.com/google/shaka-packager/compare/v2.2.1...v2.3.0
-[2.2.1]: https://github.com/google/shaka-packager/compare/v2.2.0...v2.2.1
-[2.2.0]: https://github.com/google/shaka-packager/compare/v2.1.1...v2.2.0
-[2.1.1]: https://github.com/google/shaka-packager/compare/v2.1.0...v2.1.1
-[2.1.0]: https://github.com/google/shaka-packager/compare/v2.0.3...v2.1.0
-[2.0.3]: https://github.com/google/shaka-packager/compare/v2.0.2...v2.0.3
-[2.0.2]: https://github.com/google/shaka-packager/compare/v2.0.1...v2.0.2
-[2.0.1]: https://github.com/google/shaka-packager/compare/v2.0.0...v2.0.1
-[2.0.0]: https://github.com/google/shaka-packager/compare/v1.6.2...v2.0.0
-[1.6.2]: https://github.com/google/shaka-packager/compare/v1.6.1...v1.6.2
-[1.6.1]: https://github.com/google/shaka-packager/compare/v1.6.0...v1.6.1
-[1.6.0]: https://github.com/google/shaka-packager/compare/v1.5.1...v1.6.0
-[1.5.1]: https://github.com/google/shaka-packager/compare/v1.5.0...v1.5.1
-[1.5.0]: https://github.com/google/shaka-packager/compare/v1.4.0...v1.5.0
-[1.4.1]: https://github.com/google/shaka-packager/compare/v1.4.0...v1.4.1
-[1.4.0]: https://github.com/google/shaka-packager/compare/v1.3.1...v1.4.0
-[1.3.1]: https://github.com/google/shaka-packager/compare/v1.3.0...v1.3.1
-[1.3.0]: https://github.com/google/shaka-packager/compare/v1.2.0...v1.3.0
-[1.2.1]: https://github.com/google/shaka-packager/compare/v1.2.0...v1.2.1
-[1.2.0]: https://github.com/google/shaka-packager/compare/v1.1...v1.2.0
-[1.1.0]: https://github.com/google/shaka-packager/compare/v1.0...v1.1
+[2.6.1]: https://github.com/shaka-project/shaka-packager/compare/v2.6.0...v2.6.1
+[2.6.0]: https://github.com/shaka-project/shaka-packager/compare/v2.5.1...v2.6.0
+[2.5.1]: https://github.com/shaka-project/shaka-packager/compare/v2.5.0...v2.5.1
+[2.5.0]: https://github.com/shaka-project/shaka-packager/compare/v2.4.3...v2.5.0
+[2.4.3]: https://github.com/shaka-project/shaka-packager/compare/v2.4.2...v2.4.3
+[2.4.2]: https://github.com/shaka-project/shaka-packager/compare/v2.4.1...v2.4.2
+[2.4.1]: https://github.com/shaka-project/shaka-packager/compare/v2.4.0...v2.4.1
+[2.4.0]: https://github.com/shaka-project/shaka-packager/compare/v2.3.0...v2.4.0
+[2.3.0]: https://github.com/shaka-project/shaka-packager/compare/v2.2.1...v2.3.0
+[2.2.1]: https://github.com/shaka-project/shaka-packager/compare/v2.2.0...v2.2.1
+[2.2.0]: https://github.com/shaka-project/shaka-packager/compare/v2.1.1...v2.2.0
+[2.1.1]: https://github.com/shaka-project/shaka-packager/compare/v2.1.0...v2.1.1
+[2.1.0]: https://github.com/shaka-project/shaka-packager/compare/v2.0.3...v2.1.0
+[2.0.3]: https://github.com/shaka-project/shaka-packager/compare/v2.0.2...v2.0.3
+[2.0.2]: https://github.com/shaka-project/shaka-packager/compare/v2.0.1...v2.0.2
+[2.0.1]: https://github.com/shaka-project/shaka-packager/compare/v2.0.0...v2.0.1
+[2.0.0]: https://github.com/shaka-project/shaka-packager/compare/v1.6.2...v2.0.0
+[1.6.2]: https://github.com/shaka-project/shaka-packager/compare/v1.6.1...v1.6.2
+[1.6.1]: https://github.com/shaka-project/shaka-packager/compare/v1.6.0...v1.6.1
+[1.6.0]: https://github.com/shaka-project/shaka-packager/compare/v1.5.1...v1.6.0
+[1.5.1]: https://github.com/shaka-project/shaka-packager/compare/v1.5.0...v1.5.1
+[1.5.0]: https://github.com/shaka-project/shaka-packager/compare/v1.4.0...v1.5.0
+[1.4.1]: https://github.com/shaka-project/shaka-packager/compare/v1.4.0...v1.4.1
+[1.4.0]: https://github.com/shaka-project/shaka-packager/compare/v1.3.1...v1.4.0
+[1.3.1]: https://github.com/shaka-project/shaka-packager/compare/v1.3.0...v1.3.1
+[1.3.0]: https://github.com/shaka-project/shaka-packager/compare/v1.2.0...v1.3.0
+[1.2.1]: https://github.com/shaka-project/shaka-packager/compare/v1.2.0...v1.2.1
+[1.2.0]: https://github.com/shaka-project/shaka-packager/compare/v1.1...v1.2.0
+[1.1.0]: https://github.com/shaka-project/shaka-packager/compare/v1.0...v1.1

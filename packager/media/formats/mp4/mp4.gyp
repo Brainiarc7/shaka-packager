@@ -29,6 +29,8 @@
         'fragmenter.cc',
         'fragmenter.h',
         'key_frame_info.h',
+        'low_latency_segment_segmenter.cc',
+        'low_latency_segment_segmenter.h',
         'mp4_media_parser.cc',
         'mp4_media_parser.h',
         'mp4_muxer.cc',
@@ -50,6 +52,7 @@
         '../../base/media_base.gyp:media_base',
         '../../codecs/codecs.gyp:codecs',
         '../../event/media_event.gyp:media_event',
+        '../../formats/ttml/ttml.gyp:ttml',
       ],
     },
     {

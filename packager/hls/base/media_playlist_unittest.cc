@@ -27,7 +27,7 @@ namespace {
 
 const char kDefaultPlaylistFileName[] = "default_playlist.m3u8";
 const double kTimeShiftBufferDepth = 20;
-const uint64_t kTimeScale = 90000;
+const int64_t kTimeScale = 90000;
 const uint64_t kMBytes = 1000000;
 const uint64_t kZeroByteOffset = 0;
 
@@ -153,8 +153,8 @@ TEST_F(MediaPlaylistSingleSegmentTest, InitRange) {
   const std::string kExpectedOutput =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:0\n"
       "#EXT-X-PLAYLIST-TYPE:VOD\n"
       "#EXT-X-MAP:URI=\"file.mp4\",BYTERANGE=\"501@0\"\n"
@@ -173,8 +173,8 @@ TEST_F(MediaPlaylistSingleSegmentTest, InitRangeWithOffset) {
   const std::string kExpectedOutput =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:0\n"
       "#EXT-X-PLAYLIST-TYPE:VOD\n"
       "#EXT-X-MAP:URI=\"file.mp4\",BYTERANGE=\"485@16\"\n"
@@ -196,8 +196,8 @@ TEST_F(MediaPlaylistSingleSegmentTest, AddSegmentByteRange) {
   const std::string kExpectedOutput =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:10\n"
       "#EXT-X-PLAYLIST-TYPE:VOD\n"
       "#EXT-X-MAP:URI=\"file.mp4\",BYTERANGE=\"501@0\"\n"
@@ -236,8 +236,8 @@ TEST_F(MediaPlaylistMultiSegmentTest, WriteToFile) {
   const char kExpectedOutput[] =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:0\n"
       "#EXT-X-PLAYLIST-TYPE:VOD\n"
       "#EXT-X-ENDLIST\n";
@@ -288,8 +288,8 @@ TEST_F(MediaPlaylistMultiSegmentTest, SetTargetDuration) {
   const std::string kExpectedOutput =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:20\n"
       "#EXT-X-PLAYLIST-TYPE:VOD\n"
       "#EXT-X-ENDLIST\n";
@@ -310,8 +310,8 @@ TEST_F(MediaPlaylistMultiSegmentTest, WriteToFileWithSegments) {
   const char kExpectedOutput[] =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:30\n"
       "#EXT-X-PLAYLIST-TYPE:VOD\n"
       "#EXTINF:10.000,\n"
@@ -338,8 +338,8 @@ TEST_F(MediaPlaylistMultiSegmentTest,
   const char kExpectedOutput[] =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:30\n"
       "#EXT-X-PLAYLIST-TYPE:VOD\n"
       "#EXTINF:10.000,\n"
@@ -368,8 +368,8 @@ TEST_F(MediaPlaylistMultiSegmentTest, WriteToFileWithEncryptionInfo) {
   const char kExpectedOutput[] =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:30\n"
       "#EXT-X-PLAYLIST-TYPE:VOD\n"
       "#EXT-X-KEY:METHOD=SAMPLE-AES,"
@@ -400,8 +400,8 @@ TEST_F(MediaPlaylistMultiSegmentTest, WriteToFileWithEncryptionInfoEmptyIv) {
   const char kExpectedOutput[] =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:30\n"
       "#EXT-X-PLAYLIST-TYPE:VOD\n"
       "#EXT-X-KEY:METHOD=SAMPLE-AES,"
@@ -433,8 +433,8 @@ TEST_F(MediaPlaylistMultiSegmentTest, WriteToFileWithClearLead) {
   const char kExpectedOutput[] =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:30\n"
       "#EXT-X-PLAYLIST-TYPE:VOD\n"
       "#EXTINF:10.000,\n"
@@ -486,6 +486,60 @@ TEST_F(MediaPlaylistMultiSegmentTest, GetNumChannels) {
   EXPECT_EQ(8, media_playlist_->GetNumChannels());
 }
 
+TEST_F(MediaPlaylistMultiSegmentTest, GetEC3JocComplexity) {
+  MediaInfo media_info;
+  media_info.set_reference_time_scale(kTimeScale);
+
+  // Returns 0 by default if not audio.
+  EXPECT_EQ(0, media_playlist_->GetEC3JocComplexity());
+
+  media_info.mutable_audio_info()->mutable_codec_specific_data()->
+    set_ec3_joc_complexity(16);
+  ASSERT_TRUE(media_playlist_->SetMediaInfo(media_info));
+  EXPECT_EQ(16, media_playlist_->GetEC3JocComplexity());
+
+  media_info.mutable_audio_info()->mutable_codec_specific_data()->
+    set_ec3_joc_complexity(6);
+  ASSERT_TRUE(media_playlist_->SetMediaInfo(media_info));
+  EXPECT_EQ(6, media_playlist_->GetEC3JocComplexity());
+}
+
+TEST_F(MediaPlaylistMultiSegmentTest, GetAC4ImsFlag) {
+  MediaInfo media_info;
+  media_info.set_reference_time_scale(kTimeScale);
+
+  // Returns false by default if not audio.
+  EXPECT_EQ(false, media_playlist_->GetAC4ImsFlag());
+
+  media_info.mutable_audio_info()->mutable_codec_specific_data()->
+    set_ac4_ims_flag(false);
+  ASSERT_TRUE(media_playlist_->SetMediaInfo(media_info));
+  EXPECT_EQ(false, media_playlist_->GetAC4ImsFlag());
+
+  media_info.mutable_audio_info()->mutable_codec_specific_data()->
+    set_ac4_ims_flag(true);
+  ASSERT_TRUE(media_playlist_->SetMediaInfo(media_info));
+  EXPECT_EQ(true, media_playlist_->GetAC4ImsFlag());
+}
+
+TEST_F(MediaPlaylistMultiSegmentTest, GetAC4CbiFlag) {
+  MediaInfo media_info;
+  media_info.set_reference_time_scale(kTimeScale);
+
+  // Returns false by default if not audio.
+  EXPECT_EQ(false, media_playlist_->GetAC4CbiFlag());
+
+  media_info.mutable_audio_info()->mutable_codec_specific_data()->
+    set_ac4_cbi_flag(false);
+  ASSERT_TRUE(media_playlist_->SetMediaInfo(media_info));
+  EXPECT_EQ(false, media_playlist_->GetAC4CbiFlag());
+
+  media_info.mutable_audio_info()->mutable_codec_specific_data()->
+    set_ac4_cbi_flag(true);
+  ASSERT_TRUE(media_playlist_->SetMediaInfo(media_info));
+  EXPECT_EQ(true, media_playlist_->GetAC4CbiFlag());
+}
+
 TEST_F(MediaPlaylistMultiSegmentTest, Characteristics) {
   MediaInfo media_info;
   media_info.set_reference_time_scale(kTimeScale);
@@ -513,8 +567,8 @@ TEST_F(MediaPlaylistMultiSegmentTest, InitSegment) {
   const char kExpectedOutput[] =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:30\n"
       "#EXT-X-PLAYLIST-TYPE:VOD\n"
       "#EXT-X-MAP:URI=\"init_segment.mp4\"\n"
@@ -545,8 +599,8 @@ TEST_F(MediaPlaylistMultiSegmentTest, SampleAesCenc) {
   const char kExpectedOutput[] =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:30\n"
       "#EXT-X-PLAYLIST-TYPE:VOD\n"
       "#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,"
@@ -581,8 +635,8 @@ TEST_F(MediaPlaylistMultiSegmentTest, MultipleEncryptionInfo) {
   const char kExpectedOutput[] =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:30\n"
       "#EXT-X-PLAYLIST-TYPE:VOD\n"
       "#EXT-X-KEY:METHOD=SAMPLE-AES,"
@@ -619,8 +673,8 @@ TEST_F(LiveMediaPlaylistTest, Basic) {
   const char kExpectedOutput[] =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:20\n"
       "#EXTINF:10.000,\n"
       "file1.ts\n"
@@ -644,8 +698,8 @@ TEST_F(LiveMediaPlaylistTest, TimeShifted) {
   const char kExpectedOutput[] =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:20\n"
       "#EXT-X-MEDIA-SEQUENCE:1\n"
       "#EXTINF:20.000,\n"
@@ -677,8 +731,8 @@ TEST_F(LiveMediaPlaylistTest, TimeShiftedWithEncryptionInfo) {
   const char kExpectedOutput[] =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:20\n"
       "#EXT-X-MEDIA-SEQUENCE:1\n"
       "#EXT-X-KEY:METHOD=SAMPLE-AES,"
@@ -736,8 +790,8 @@ TEST_F(LiveMediaPlaylistTest, TimeShiftedWithEncryptionInfoShifted) {
   const char kExpectedOutput[] =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:20\n"
       "#EXT-X-MEDIA-SEQUENCE:2\n"
       "#EXT-X-DISCONTINUITY-SEQUENCE:1\n"
@@ -781,8 +835,8 @@ TEST_F(EventMediaPlaylistTest, Basic) {
   const char kExpectedOutput[] =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:20\n"
       "#EXT-X-PLAYLIST-TYPE:EVENT\n"
       "#EXTINF:10.000,\n"
@@ -826,8 +880,8 @@ TEST_F(IFrameMediaPlaylistTest, SingleSegment) {
   const char kExpectedOutput[] =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:9\n"
       "#EXT-X-PLAYLIST-TYPE:VOD\n"
       "#EXT-X-I-FRAMES-ONLY\n"
@@ -868,8 +922,8 @@ TEST_F(IFrameMediaPlaylistTest, MultiSegment) {
   const char kExpectedOutput[] =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:25\n"
       "#EXT-X-PLAYLIST-TYPE:VOD\n"
       "#EXT-X-I-FRAMES-ONLY\n"
@@ -910,8 +964,8 @@ TEST_F(IFrameMediaPlaylistTest, MultiSegmentWithPlacementOpportunity) {
   const char kExpectedOutput[] =
       "#EXTM3U\n"
       "#EXT-X-VERSION:6\n"
-      "## Generated with https://github.com/google/shaka-packager version "
-      "test\n"
+      "## Generated with https://github.com/shaka-project/shaka-packager "
+      "version test\n"
       "#EXT-X-TARGETDURATION:25\n"
       "#EXT-X-PLAYLIST-TYPE:VOD\n"
       "#EXT-X-I-FRAMES-ONLY\n"
@@ -948,8 +1002,8 @@ const char kIgnoredSegmentName[] = "ignored_segment_name";
 const char kSegmentTemplateTime[] = "memory://$Time$.mp4";
 const char kSegmentTemplateTimeUrl[] = "video/$Time$.mp4";
 
-const uint64_t kInitialStartTime = 0;
-const uint64_t kDuration = kTimeScale;
+const int64_t kInitialStartTime = 0;
+const int64_t kDuration = kTimeScale;
 }  // namespace
 
 class MediaPlaylistDeleteSegmentsTest

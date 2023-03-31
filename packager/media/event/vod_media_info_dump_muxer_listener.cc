@@ -22,8 +22,9 @@ namespace shaka {
 namespace media {
 
 VodMediaInfoDumpMuxerListener::VodMediaInfoDumpMuxerListener(
-    const std::string& output_file_path)
-    : output_file_name_(output_file_path) {}
+    const std::string& output_file_path, bool use_segment_list)
+    : output_file_name_(output_file_path),
+      use_segment_list_(use_segment_list) {}
 
 VodMediaInfoDumpMuxerListener::~VodMediaInfoDumpMuxerListener() {}
 
@@ -45,7 +46,7 @@ void VodMediaInfoDumpMuxerListener::OnEncryptionInfoReady(
 void VodMediaInfoDumpMuxerListener::OnMediaStart(
     const MuxerOptions& muxer_options,
     const StreamInfo& stream_info,
-    uint32_t time_scale,
+    int32_t time_scale,
     ContainerType container_type) {
   DCHECK(muxer_options.segment_template.empty());
   media_info_.reset(new MediaInfo());
@@ -67,7 +68,7 @@ void VodMediaInfoDumpMuxerListener::OnMediaStart(
 void VodMediaInfoDumpMuxerListener::OnEncryptionStart() {}
 
 void VodMediaInfoDumpMuxerListener::OnSampleDurationReady(
-    uint32_t sample_duration) {
+    int32_t sample_duration) {
   // Assume one VideoInfo.
   if (media_info_->has_video_info()) {
     media_info_->mutable_video_info()->set_frame_duration(sample_duration);
@@ -78,7 +79,7 @@ void VodMediaInfoDumpMuxerListener::OnMediaEnd(const MediaRanges& media_ranges,
                                                float duration_seconds) {
   DCHECK(media_info_);
   if (!internal::SetVodInformation(media_ranges, duration_seconds,
-                                   media_info_.get())) {
+                                   use_segment_list_, media_info_.get())) {
     LOG(ERROR) << "Failed to generate VOD information from input.";
     return;
   }

@@ -54,6 +54,8 @@ struct CueEvent {
 
 struct SegmentInfo {
   bool is_subsegment = false;
+  bool is_chunk = false;
+  bool is_final_chunk_in_seg = false;
   bool is_encrypted = false;
   int64_t start_timestamp = -1;
   int64_t duration = 0;
@@ -172,8 +174,7 @@ class MediaHandler {
   /// Validate if the handler is connected to its upstream handler.
   bool IsConnected() { return num_input_streams_ > 0; }
 
-  static Status Chain(
-      std::initializer_list<std::shared_ptr<MediaHandler>> list);
+  static Status Chain(const std::vector<std::shared_ptr<MediaHandler>>& list);
 
  protected:
   /// Internal implementation of initialize. Note that it should only initialize

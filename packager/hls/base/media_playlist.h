@@ -103,7 +103,7 @@ class MediaPlaylist {
   /// Sample duration is not available right away especially. This allows
   /// setting the sample duration after the Media Playlist has been initialized.
   /// @param sample_duration is the duration of a sample.
-  virtual void SetSampleDuration(uint32_t sample_duration);
+  virtual void SetSampleDuration(int32_t sample_duration);
 
   /// Segments must be added in order.
   /// @param file_name is the file name of the segment.
@@ -152,7 +152,7 @@ class MediaPlaylist {
 
   /// Write the playlist to |file_path|.
   /// This does not close the file.
-  /// If target duration is not set expliticly, this will try to find the target
+  /// If target duration is not set explicitly, this will try to find the target
   /// duration. Note that target duration cannot be changed. So calling this
   /// without explicitly setting the target duration and before adding any
   /// segments will end up setting the target duration to 0 and will always
@@ -183,10 +183,25 @@ class MediaPlaylist {
   /// The spec does not allow changing EXT-X-TARGETDURATION. However, this class
   /// has no control over the input source.
   /// @param target_duration is the target duration for this playlist.
-  virtual void SetTargetDuration(uint32_t target_duration);
+  virtual void SetTargetDuration(int32_t target_duration);
 
   /// @return number of channels for audio. 0 is returned for video.
   virtual int GetNumChannels() const;
+
+  /// @return Dolby Digital Plus JOC decoding complexity, ETSI TS 103 420 v1.2.1
+  ///         Backwards-compatible object audio carriage using Enhanced AC-3
+  ///         Standard C.3.2.3.
+  virtual int GetEC3JocComplexity() const;
+
+  /// @return true if it's an AC-4 IMS stream, based on Dolby AC-4 in MPEG-DASH
+  ///         for Online Delivery Specification 2.5.3.
+  ///         https://developer.dolby.com/tools-media/online-delivery-kits/dolby-ac-4/
+  virtual bool GetAC4ImsFlag() const;
+
+  /// @return true if it's an AC-4 CBI stream, based on ETSI TS 103 190-2
+  ///         Digital Audio Compression (AC-4) Standard; Part 2: Immersive and
+  ///         personalized audio 4.3.
+  virtual bool GetAC4CbiFlag() const;
 
   /// @return true if |width| and |height| have been set with a valid
   ///         resolution values.
@@ -204,6 +219,15 @@ class MediaPlaylist {
 
   const std::vector<std::string>& characteristics() const {
     return characteristics_;
+  }
+
+  bool is_dvs() const {
+    // HLS Authoring Specification for Apple Devices
+    // https://developer.apple.com/documentation/http_live_streaming/hls_authoring_specification_for_apple_devices#overview
+    // Section 2.12.
+    const char DVS_CHARACTERISTICS[] = "public.accessibility.describes-video";
+    return characteristics_.size() == 1 &&
+           characteristics_[0] == DVS_CHARACTERISTICS;
   }
 
  private:
@@ -241,7 +265,7 @@ class MediaPlaylist {
   int discontinuity_sequence_number_ = 0;
 
   double longest_segment_duration_seconds_ = 0.0;
-  uint32_t time_scale_ = 0;
+  int32_t time_scale_ = 0;
 
   BandwidthEstimator bandwidth_estimator_;
 
@@ -251,7 +275,7 @@ class MediaPlaylist {
 
   // See SetTargetDuration() comments.
   bool target_duration_set_ = false;
-  uint32_t target_duration_ = 0;
+  int32_t target_duration_ = 0;
 
   // TODO(kqyang): This could be managed better by a separate class, than having
   // all them managed in MediaPlaylist.

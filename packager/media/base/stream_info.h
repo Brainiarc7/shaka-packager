@@ -40,6 +40,7 @@ enum Codec {
   kCodecAudio = 200,
   kCodecAAC = kCodecAudio,
   kCodecAC3,
+  kCodecAC4,
   // TODO(kqyang): Use kCodecDTS and a kDtsStreamFormat for the various DTS
   // streams.
   kCodecDTSC,
@@ -52,10 +53,14 @@ enum Codec {
   kCodecFlac,
   kCodecOpus,
   kCodecVorbis,
+  kCodecMP3,
+  kCodecMha1,
+  kCodecMhm1,
   kCodecAudioMaxPlusOne,
 
   kCodecText = 300,
   kCodecWebVtt = kCodecText,
+  kCodecTtml,
 };
 
 /// Abstract class holds stream information.
@@ -65,8 +70,8 @@ class StreamInfo {
 
   StreamInfo(StreamType stream_type,
              int track_id,
-             uint32_t time_scale,
-             uint64_t duration,
+             int32_t time_scale,
+             int64_t duration,
              Codec codec,
              const std::string& codec_string,
              const uint8_t* codec_config,
@@ -90,8 +95,8 @@ class StreamInfo {
 
   StreamType stream_type() const { return stream_type_; }
   uint32_t track_id() const { return track_id_; }
-  uint32_t time_scale() const { return time_scale_; }
-  uint64_t duration() const { return duration_; }
+  int32_t time_scale() const { return time_scale_; }
+  int64_t duration() const { return duration_; }
   Codec codec() const { return codec_; }
   const std::string& codec_string() const { return codec_string_; }
   const std::vector<uint8_t>& codec_config() const { return codec_config_; }
@@ -102,7 +107,7 @@ class StreamInfo {
     return encryption_config_;
   }
 
-  void set_duration(uint64_t duration) { duration_ = duration; }
+  void set_duration(int64_t duration) { duration_ = duration; }
   void set_codec(Codec codec) { codec_ = codec; }
   void set_codec_config(const std::vector<uint8_t>& data) {
     codec_config_ = data;
@@ -124,9 +129,9 @@ class StreamInfo {
   StreamType stream_type_;
   uint32_t track_id_;
   // The actual time is calculated as time / time_scale_ in seconds.
-  uint32_t time_scale_;
+  int32_t time_scale_;
   // Duration base on time_scale.
-  uint64_t duration_;
+  int64_t duration_;
   Codec codec_;
   std::string codec_string_;
   std::string language_;
