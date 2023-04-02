@@ -212,8 +212,8 @@ bool DvbImageBuilder::AddPixel(BitDepth bit_depth,
                                bool is_top_rows) {
   auto& pos = is_top_rows ? top_pos_ : bottom_pos_;
   if (pos.x >= max_width_ || pos.y >= max_height_) {
-    LOG(ERROR) << "DVB-sub image cannot fit in region/window";
-    return false;
+    LOG(WARNING) << "DVB-sub image cannot fit in region/window";
+    return true;
   }
 
   pixels_[pos.y * max_width_ + pos.x++] =
@@ -258,8 +258,8 @@ bool DvbImageBuilder::GetPixels(const RgbaColor** pixels,
   *height = static_cast<uint16_t>(max_y - 1);
   *pixels = pixels_.get();
   if (*height > max_height_) {
-    LOG(ERROR) << "DVB-sub image cannot fit in region/window";
-    return false;
+    LOG(WARNING) << "DVB-sub image cannot fit in region/window";
+    return true;
   }
 
   return true;
