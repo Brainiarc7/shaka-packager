@@ -211,7 +211,10 @@ bool DvbImageBuilder::AddPixel(BitDepth bit_depth,
                                uint8_t byte_code,
                                bool is_top_rows) {
   auto& pos = is_top_rows ? top_pos_ : bottom_pos_;
-
+  if (pos.x >= max_width_ || pos.y >= max_height_) {
+    LOG(WARNING) << "DVB-sub image cannot fit in region/window";
+    return true;
+  }
 
   pixels_[pos.y * max_width_ + pos.x++] =
       color_space_->GetColor(bit_depth, byte_code);
@@ -254,7 +257,10 @@ bool DvbImageBuilder::GetPixels(const RgbaColor** pixels,
   // We skipped the other row in NewRow, so rollback.
   *height = static_cast<uint16_t>(max_y - 1);
   *pixels = pixels_.get();
-
+  if (*height > max_height_) {
+    LOG(WARNING) << "DVB-sub image cannot fit in region/window";
+    return true;
+  }
 
   return true;
 }
