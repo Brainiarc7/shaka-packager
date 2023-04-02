@@ -110,8 +110,8 @@ bool SubtitleComposer::SetRegionInfo(uint8_t region_id,
   auto* region = &regions_[region_id];
   if (region->x + width > display_width_ ||
       region->y + height > display_height_) {
-    LOG(ERROR) << "DVB-sub region won't fit within display";
-    return false;
+    LOG(WARNING) << "DVB-sub region won't fit within display";
+    return true;
   }
   if (width == 0 || height == 0) {
     LOG(ERROR) << "DVB-sub width/height cannot be 0";
@@ -130,8 +130,8 @@ bool SubtitleComposer::SetRegionPosition(uint8_t region_id,
   auto* region = &regions_[region_id];
   if (x + region->width > display_width_ ||
       y + region->height > display_height_) {
-    LOG(ERROR) << "DVB-sub region won't fit within display";
-    return false;
+    LOG(WARNING) << "DVB-sub region won't fit within display";
+    return true;
   }
 
   region->x = x;
@@ -151,8 +151,8 @@ bool SubtitleComposer::SetObjectInfo(uint16_t object_id,
     return false;
   }
   if (x >= region->second.width || y >= region->second.height) {
-    LOG(ERROR) << "DVB-sub object is outside region: " << object_id;
-    return false;
+    LOG(WARNING) << "DVB-sub object is outside region: " << object_id;
+    return true;
   }
 
   auto* object = &objects_[object_id];
